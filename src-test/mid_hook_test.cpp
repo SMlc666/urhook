@@ -171,3 +171,29 @@ void worker_thread_main() {
     }
 }
 
+TEST(MidHookTest, EnableDisableUnhook) {
+    g_callback_executed = false;
+    uintptr_t target_address = reinterpret_cast<uintptr_t>(&target_function);
+
+    ur::mid_hook::MidHook hook(target_address, &hook_callback);
+    ASSERT_TRUE(hook.is_valid());
+
+    // 1. Test disable
+    ASSERT_TRUE(hook.disable());
+    g_callback_executed = false;
+    target_function(1, 2);
+    ASSERT_FALSE(g_callback_executed);
+
+    // 2. Test enable
+    ASSERT_TRUE(hook.enable());
+    g_callback_executed = false;
+    target_function(1, 2);
+    ASSERT_TRUE(g_callback_executed);
+
+    // 3. Test unhook
+    hook.unhook();
+    ASSERT_FALSE(hook.is_valid());
+    g_callback_executed = false;
+    target_function(1, 2);
+    ASSERT_FALSE(g_callback_executed);
+}

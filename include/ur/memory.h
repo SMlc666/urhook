@@ -1,11 +1,22 @@
 #pragma once
 
 #include <cstdint>
-#include <string_view>
+#include <string>
 #include <sys/uio.h> // For process_vm_writev
 
 namespace ur {
     namespace memory {
+        struct MappedRegion {
+            uintptr_t start = 0;
+            uintptr_t end = 0;
+            uintptr_t offset = 0;
+            std::string perms;
+            std::string path;
+        };
+
+        // Finds the memory mapped region for a given address.
+        bool find_mapped_region(uintptr_t address, MappedRegion& region);
+
         // 读取内存
         bool read(uintptr_t address, void* buffer, size_t size);
 

@@ -3,6 +3,8 @@
 #include <unistd.h>
 #include <cstring>
 #include <sys/uio.h> // For process_vm_writev
+#include <fstream>
+#include <sstream>
 
 namespace ur {
     namespace memory {
@@ -56,6 +58,43 @@ namespace ur {
             // Flushes the pipeline and ensures that all subsequent instructions
             // are fetched from the newly cleaned cache.
             asm volatile("isb" : : : "memory");
+        }
+
+        bool find_mapped_region(uintptr_t address, MappedRegion& region) {
+            std::ifstream maps_file("/proc/self/maps");
+            std::string line;
+            if (!maps_file.is_open()) {
+                return false;
+            }
+
+            while (std::getline(maps_file, line)) {
+                std::istringstream iss(line);
+                uintptr_t start, end, offset;
+                char dash, colon;
+                std::string perms, dev;
+                long inode;
+                std::string path;
+
+                iss >> std::hex >> start >> dash >> end >> perms >> offset >> std::dec >> dev >> inode;
+                // The rest of the line is the path, which might contain spaces
+                std::getline(iss, path);
+                // Trim leading whitespace from path
+                path.erase(0, path.find_first_not_of(" \t"));
+
+
+                if (address >= start && address < end) {
+                    region.start = start;
+                    region.end = end;
+                    region.offset = offset;
+                    region.perms = perms;
+                    region.path = path;
+                    maps_file.close();
+                    return true;
+                }
+            }
+
+            maps_file.close();
+            return false;
         }
     }
 }

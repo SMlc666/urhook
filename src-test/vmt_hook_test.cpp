@@ -133,3 +133,26 @@ TEST(VmtHookTest, MultiThreadedHooking) {
 
     std::cout << "--- MultiThreadedVmtHook Test Finished ---" << std::endl;
 }
+
+TEST(VmtHookTest, EnableDisableUnhook) {
+    using namespace ur::vmt_hook_test;
+
+    TestClass instance;
+    TestClass* instance_ptr = &instance;
+    ur::VmtHook vmt_hook(instance_ptr);
+
+    hook_handle = vmt_hook.hook_method(0, reinterpret_cast<void*>(&hooked_test_method));
+    ASSERT_NE(hook_handle, nullptr);
+
+    // 1. Test disable
+    ASSERT_TRUE(hook_handle->disable());
+    ASSERT_EQ(instance_ptr->test_method(10), 20);
+
+    // 2. Test enable
+    ASSERT_TRUE(hook_handle->enable());
+    ASSERT_EQ(instance_ptr->test_method(10), 120);
+
+    // 3. Test unhook
+    hook_handle->unhook();
+    ASSERT_EQ(instance_ptr->test_method(10), 20);
+}

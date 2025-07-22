@@ -23,6 +23,7 @@ struct HookEntry {
     Hook* owner = nullptr; // Back-pointer to the Hook object
     Hook::Callback callback = nullptr;
     void* call_next = nullptr; // Address to call for the "original" function
+    bool is_enabled = true;
 };
 
 // Holds all information about a hooked target address.
@@ -270,6 +271,7 @@ Hook::Hook(uintptr_t target, Callback callback) {
         info.entries.push_front({this, callback, nullptr});
         
         patch_target(target, reinterpret_cast<uintptr_t>(callback));
+        is_enabled_ = true;
     } catch (...) {
         thread::resume_all_other_threads();
         throw;
@@ -281,7 +283,7 @@ Hook::~Hook() {
     unhook();
 }
 
-void Hook::unhook() {
+void Hook::do_unhook() {
     if (!is_valid()) return;
 
     thread::suspend_all_other_threads();
@@ -316,10 +318,93 @@ void Hook::unhook() {
     thread::resume_all_other_threads();
 }
 
+void Hook::unhook() {
+    if (is_enabled_) {
+        do_unhook();
+    }
+}
+
+bool Hook::enable() {
+    if (!is_valid() || is_enabled_) {
+        return false;
+    }
+
+    thread::suspend_all_other_threads();
+    std::lock_guard<std::mutex> lock(g_hooks_mutex);
+    auto it = g_hooks.find(target_address_);
+    if (it == g_hooks.end()) {
+        thread::resume_all_other_threads();
+        return false;
+    }
+
+    auto& info = *it->second;
+    std::lock_guard<std::mutex> info_lock(info.info_mutex);
+
+    auto entry_it = std::find_if(info.entries.begin(), info.entries.end(),
+        [this](const HookEntry& entry) { return entry.owner == this; });
+
+    if (entry_it != info.entries.end()) {
+        entry_it->is_enabled = true;
+    }
+
+    // Re-patch to the first enabled hook
+    auto first_enabled = std::find_if(info.entries.begin(), info.entries.end(),
+        [](const HookEntry& entry) { return entry.is_enabled; });
+
+    if (first_enabled != info.entries.end()) {
+        patch_target(target_address_, reinterpret_cast<uintptr_t>(first_enabled->callback));
+    } else {
+        restore_target(info);
+    }
+
+    is_enabled_ = true;
+    thread::resume_all_other_threads();
+    return true;
+}
+
+bool Hook::disable() {
+    if (!is_valid() || !is_enabled_) {
+        return false;
+    }
+
+    thread::suspend_all_other_threads();
+    std::lock_guard<std::mutex> lock(g_hooks_mutex);
+    auto it = g_hooks.find(target_address_);
+    if (it == g_hooks.end()) {
+        thread::resume_all_other_threads();
+        return false;
+    }
+
+    auto& info = *it->second;
+    std::lock_guard<std::mutex> info_lock(info.info_mutex);
+
+    auto entry_it = std::find_if(info.entries.begin(), info.entries.end(),
+        [this](const HookEntry& entry) { return entry.owner == this; });
+
+    if (entry_it != info.entries.end()) {
+        entry_it->is_enabled = false;
+    }
+
+    // Re-patch to the first enabled hook
+    auto first_enabled = std::find_if(info.entries.begin(), info.entries.end(),
+        [](const HookEntry& entry) { return entry.is_enabled; });
+
+    if (first_enabled != info.entries.end()) {
+        patch_target(target_address_, reinterpret_cast<uintptr_t>(first_enabled->callback));
+    } else {
+        restore_target(info);
+    }
+
+    is_enabled_ = false;
+    thread::resume_all_other_threads();
+    return true;
+}
+
 Hook::Hook(Hook&& other) noexcept
     : target_address_(other.target_address_),
       callback_(other.callback_),
-      original_func_(other.original_func_) {
+      original_func_(other.original_func_),
+      is_enabled_(other.is_enabled_) {
     if (!is_valid()) return;
     std::lock_guard<std::mutex> lock(g_hooks_mutex);
     auto it = g_hooks.find(target_address_);
@@ -341,6 +426,7 @@ Hook& Hook::operator=(Hook&& other) noexcept {
         target_address_ = other.target_address_;
         callback_ = other.callback_;
         original_func_ = other.original_func_;
+        is_enabled_ = other.is_enabled_;
         
         if (is_valid()) {
             std::lock_guard<std::mutex> lock(g_hooks_mutex);
@@ -368,6 +454,7 @@ void Hook::reset() {
     target_address_ = 0;
     callback_ = nullptr;
     original_func_ = nullptr;
+    is_enabled_ = false;
 }
 
 } // namespace ur::inline_hook

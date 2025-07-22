@@ -2,7 +2,7 @@ add_rules("mode.debug", "mode.release")
 add_requires("gtest")
 add_requires("capstone")
 set_languages("c++20")
-set_symbols("debug")
+
 target("urhook")
     set_kind("static")
     add_packages("capstone",{

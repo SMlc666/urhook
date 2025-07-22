@@ -36,13 +36,30 @@ namespace ur {
             return reinterpret_cast<T>(original_function_);
         }
 
-    private:
-        friend class VmtHook;
-        VmHook(void** vmt_entry_address, void* original_function);
-
+        /**
+         * @brief Manually unhooks the method, restoring the original function pointer.
+         */
         void unhook();
 
+        /**
+         * @brief Enables the hook if it was previously disabled.
+         * @return True on success, false otherwise.
+         */
+        bool enable();
+
+        /**
+         * @brief Disables the hook without removing it, allowing it to be re-enabled later.
+         * @return True on success, false otherwise.
+         */
+        bool disable();
+
+    private:
+        friend class VmtHook;
+        VmHook(void** vmt_entry_address, void* hook_function, void* original_function);
+
         void** vmt_entry_address_{nullptr};
+        void* hook_function_{nullptr};
         void* original_function_{nullptr};
+        bool is_enabled_{false};
     };
 }

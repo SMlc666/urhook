@@ -38,6 +38,23 @@ public:
 
     bool is_valid() const;
 
+    /**
+     * @brief Manually unhooks the function, restoring the original code.
+     */
+    void unhook();
+
+    /**
+     * @brief Enables the hook if it was previously disabled.
+     * @return True on success, false otherwise.
+     */
+    bool enable();
+
+    /**
+     * @brief Disables the hook without removing it, allowing it to be re-enabled later.
+     * @return True on success, false otherwise.
+     */
+    bool disable();
+
     // This is for calling the original function from OUTSIDE the hook chain.
     template<typename Ret, typename... Args>
     Ret call_original(Args... args) const {
@@ -50,13 +67,13 @@ public:
     }
 
 private:
-    void unhook();
+    void do_unhook();
     void reset();
 
     uintptr_t target_address_{0};
     Callback callback_{nullptr};
     void* original_func_{nullptr}; // Points to the trampoline
-    void* dispatcher_{nullptr};    // Points to the generated dispatcher code for this hook
+    bool is_enabled_{false};
 };
 
 } // namespace ur::inline_hook

@@ -11,7 +11,10 @@ MidHook::MidHook(uintptr_t target, Callback callback)
     if (!target_address_ || !callback_) {
         throw std::invalid_argument("Target and callback must not be null.");
     }
+    do_hook();
+}
 
+void MidHook::do_hook() {
     thread::suspend_all_other_threads();
 
     try {
@@ -92,7 +95,7 @@ MidHook::MidHook(uintptr_t target, Callback callback)
 
         memory::protect(target_address_, JUMP_INSTRUCTION_SIZE, PROT_READ | PROT_EXEC);
 
-        is_hooked_ = true;
+        is_enabled_ = true;
     } catch (...) {
         thread::resume_all_other_threads();
         throw;
@@ -101,15 +104,49 @@ MidHook::MidHook(uintptr_t target, Callback callback)
     thread::resume_all_other_threads();
 }
 
+void MidHook::do_unhook() {
+    if (!is_valid()) return;
+
+    thread::suspend_all_other_threads();
+    memory::protect(target_address_, original_instructions_.size(), PROT_READ | PROT_WRITE | PROT_EXEC);
+    memory::write(target_address_, original_instructions_.data(), original_instructions_.size());
+    memory::protect(target_address_, original_instructions_.size(), PROT_READ | PROT_EXEC);
+    memory::flush_instruction_cache(target_address_, original_instructions_.size());
+    thread::resume_all_other_threads();
+}
+
 void MidHook::unhook() {
-    if (is_valid() && !original_instructions_.empty()) {
-        thread::suspend_all_other_threads();
-        memory::protect(target_address_, original_instructions_.size(), PROT_READ | PROT_WRITE | PROT_EXEC);
-        memory::write(target_address_, original_instructions_.data(), original_instructions_.size());
-        memory::protect(target_address_, original_instructions_.size(), PROT_READ | PROT_EXEC);
-        memory::flush_instruction_cache(target_address_, original_instructions_.size());
-        thread::resume_all_other_threads();
+    if (is_enabled_) {
+        do_unhook();
     }
+    reset();
+}
+
+bool MidHook::enable() {
+    if (!is_valid() || is_enabled_) {
+        return false;
+    }
+    thread::suspend_all_other_threads();
+    jit::Jit branch_jit;
+    branch_jit.gen_abs_jump(reinterpret_cast<uintptr_t>(detour_), assembler::Register::X16);
+    const auto& branch_code_words = branch_jit.get_code();
+    const uint8_t* branch_code = reinterpret_cast<const uint8_t*>(branch_code_words.data());
+    memory::protect(target_address_, JUMP_INSTRUCTION_SIZE, PROT_READ | PROT_WRITE | PROT_EXEC);
+    memory::write(target_address_, branch_code, JUMP_INSTRUCTION_SIZE);
+    memory::protect(target_address_, JUMP_INSTRUCTION_SIZE, PROT_READ | PROT_EXEC);
+    memory::flush_instruction_cache(target_address_, JUMP_INSTRUCTION_SIZE);
+    is_enabled_ = true;
+    thread::resume_all_other_threads();
+    return true;
+}
+
+bool MidHook::disable() {
+    if (!is_valid() || !is_enabled_) {
+        return false;
+    }
+    do_unhook();
+    is_enabled_ = false;
+    return true;
 }
 
 void MidHook::reset() {
@@ -117,14 +154,12 @@ void MidHook::reset() {
     callback_ = nullptr;
     original_instructions_.clear();
     detour_ = nullptr;
-    is_hooked_ = false;
+    is_enabled_ = false;
     // detour_jit_ is reset via its move assignment or destructor.
 }
 
 MidHook::~MidHook() {
-    if (is_hooked_) {
-        unhook();
-    }
+    unhook();
 }
 
 MidHook::MidHook(MidHook&& other) noexcept
@@ -133,28 +168,26 @@ MidHook::MidHook(MidHook&& other) noexcept
       original_instructions_(std::move(other.original_instructions_)),
       detour_jit_(std::move(other.detour_jit_)),
       detour_(other.detour_),
-      is_hooked_(other.is_hooked_) {
+      is_enabled_(other.is_enabled_) {
     other.reset();
 }
 
 MidHook& MidHook::operator=(MidHook&& other) noexcept {
     if (this != &other) {
-        if (is_hooked_) {
-            unhook();
-        }
+        unhook();
         target_address_ = other.target_address_;
         callback_ = other.callback_;
         original_instructions_ = std::move(other.original_instructions_);
         detour_jit_ = std::move(other.detour_jit_);
         detour_ = other.detour_;
-        is_hooked_ = other.is_hooked_;
+        is_enabled_ = other.is_enabled_;
         other.reset();
     }
     return *this;
 }
 
 bool MidHook::is_valid() const {
-    return is_hooked_ && target_address_ != 0 && detour_ != nullptr;
+    return target_address_ != 0 && detour_ != nullptr;
 }
 
 } // namespace ur::mid_hook

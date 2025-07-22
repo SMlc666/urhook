@@ -390,3 +390,34 @@ EXPECT_EQ(g_atomic_counter.load(), call_count.load() * 2);
 std::cout << "--- MultiThreadedHooking Test Finished ---" << std::endl;
 
 }
+
+TEST_F(InlineHookTest, EnableDisableUnhook) {
+    ur::inline_hook::Hook hook(
+        reinterpret_cast<uintptr_t>(&target_function_to_hook),
+        reinterpret_cast<ur::inline_hook::Hook::Callback>(&hook_callback_1)
+    );
+    g_hook1 = &hook;
+    ASSERT_TRUE(hook.is_valid());
+
+    // 1. Test disable
+    ASSERT_TRUE(hook.disable());
+    g_hook_call_log.clear();
+    int result = target_function_to_hook(1, 2);
+    ASSERT_TRUE(g_hook_call_log.empty());
+    ASSERT_EQ(result, 3);
+
+    // 2. Test enable
+    ASSERT_TRUE(hook.enable());
+    g_hook_call_log.clear();
+    result = target_function_to_hook(1, 2);
+    ASSERT_EQ(g_hook_call_log.size(), 1);
+    ASSERT_EQ(result, 13);
+
+    // 3. Test unhook
+    hook.unhook();
+    ASSERT_FALSE(hook.is_valid());
+    g_hook_call_log.clear();
+    result = target_function_to_hook(1, 2);
+    ASSERT_TRUE(g_hook_call_log.empty());
+    ASSERT_EQ(result, 3);
+}

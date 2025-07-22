@@ -55,8 +55,26 @@ public:
      */
     bool is_valid() const;
 
-private:
+    /**
+     * @brief Manually unhooks the function, restoring the original code.
+     */
     void unhook();
+
+    /**
+     * @brief Enables the hook if it was previously disabled.
+     * @return True on success, false otherwise.
+     */
+    bool enable();
+
+    /**
+     * @brief Disables the hook without removing it, allowing it to be re-enabled later.
+     * @return True on success, false otherwise.
+     */
+    bool disable();
+
+private:
+    void do_hook();
+    void do_unhook();
     void reset();
 
     static constexpr size_t JUMP_INSTRUCTION_SIZE = assembler::Assembler::ABS_JUMP_SIZE;
@@ -66,7 +84,7 @@ private:
     std::vector<uint8_t> original_instructions_{};
     jit::Jit detour_jit_{}; // Owns the JIT-compiled detour memory
     void* detour_{nullptr};
-    bool is_hooked_{false};
+    bool is_enabled_{false};
 };
 
 } // namespace ur::mid_hook
