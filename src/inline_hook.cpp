@@ -1,9 +1,8 @@
 #include "ur/inline_hook.h"
 #include "ur/memory.h"
 #include "ur/assembler.h"
-#include "ur/thread.h"
+#include "ur/disassembler.h"
 
-#include <capstone/capstone.h>
 #include <map>
 #include <mutex>
 #include <list>
@@ -39,25 +38,6 @@ struct HookInfo {
 // Global map to manage all active hooks.
 static std::map<uintptr_t, std::unique_ptr<HookInfo>> g_hooks;
 static std::mutex g_hooks_mutex;
-
-// RAII wrapper for Capstone.
-class CapstoneHandle {
-public:
-    CapstoneHandle() {
-        if (cs_open(CS_ARCH_ARM64, CS_MODE_ARM, &handle_) != CS_ERR_OK) {
-            throw std::runtime_error("Failed to initialize Capstone");
-        }
-        cs_option(handle_, CS_OPT_DETAIL, CS_OPT_ON);
-    }
-    ~CapstoneHandle() {
-        if (handle_ != 0) cs_close(&handle_);
-    }
-    csh get() const { return handle_; }
-    CapstoneHandle(const CapstoneHandle&) = delete;
-    CapstoneHandle& operator=(const CapstoneHandle&) = delete;
-private:
-    csh handle_ = 0;
-};
 
 void* allocate_executable_memory(size_t size) {
     long page_size = sysconf(_SC_PAGESIZE);
@@ -102,114 +82,110 @@ bool restore_target(HookInfo& info) {
 // Relocates instructions from the target function to a trampoline.
 // Returns the relocated machine code.
 std::vector<uint32_t> relocate_trampoline(uintptr_t target, uintptr_t trampoline_addr, size_t& backup_size) {
-    CapstoneHandle cs;
-    cs_insn* insn;
+    auto disassembler = disassembler::CreateAArch64Disassembler();
     const uint8_t* code = reinterpret_cast<const uint8_t*>(target);
     const size_t required_size = assembler::Assembler::ABS_JUMP_SIZE;
     
-    size_t count = cs_disasm(cs.get(), code, 100, target, 0, &insn);
-    if (count == 0) throw std::runtime_error("Failed to disassemble target function");
+    auto instructions = disassembler->Disassemble(target, code, 100, 20); // Disassemble up to 20 instructions
+    if (instructions.empty()) {
+        throw std::runtime_error("Failed to disassemble target function");
+    }
 
     assembler::Assembler tramp_asm(trampoline_addr);
     backup_size = 0;
 
-    for (size_t i = 0; i < count; ++i) {
-        cs_insn& current_insn = insn[i];
-        cs_detail* detail = current_insn.detail;
+    for (size_t i = 0; i < instructions.size(); ++i) {
+        auto& current_insn = instructions[i];
 
-        // Handle ADRP instruction
-        if (current_insn.id == ARM64_INS_ADRP) {
-            bool pair_relocated = false;
-            uintptr_t page_addr = detail->arm64.operands[1].imm;
+        if (current_insn.is_pc_relative) {
+            // Handle ADRP instruction
+            if (current_insn.id == disassembler::InstructionId::ADRP) {
+                bool pair_relocated = false;
+                uintptr_t page_addr = std::get<int64_t>(current_insn.operands[1].value);
 
-            if (i + 1 < count) {
-                cs_insn& next_insn = insn[i + 1];
-                cs_detail* next_detail = next_insn.detail;
-                auto adrp_dest_reg = detail->arm64.operands[0].reg;
-                uintptr_t final_addr;
+                if (i + 1 < instructions.size()) {
+                    auto& next_insn = instructions[i + 1];
+                    auto adrp_dest_reg = std::get<assembler::Register>(current_insn.operands[0].value);
+                    uintptr_t final_addr;
 
-                // Case 1: ADRP + ADD
-                if (next_insn.id == ARM64_INS_ADD && next_detail->arm64.op_count > 2 &&
-                    next_detail->arm64.operands[1].type == ARM64_OP_REG && next_detail->arm64.operands[1].reg == adrp_dest_reg &&
-                    next_detail->arm64.operands[2].type == ARM64_OP_IMM) {
+                    // Case 1: ADRP + ADD
+                    if (next_insn.id == disassembler::InstructionId::ADD && next_insn.operands.size() > 2 &&
+                        next_insn.operands[1].type == disassembler::OperandType::REGISTER && std::get<assembler::Register>(next_insn.operands[1].value) == adrp_dest_reg &&
+                        next_insn.operands[2].type == disassembler::OperandType::IMMEDIATE) {
 
-                    final_addr = page_addr + next_detail->arm64.operands[2].imm;
-                    auto dest_reg = static_cast<assembler::Register>(next_detail->arm64.operands[0].reg - ARM64_REG_X0);
-                    tramp_asm.gen_load_address(dest_reg, final_addr);
-                    pair_relocated = true;
-                }
-                // Case 2: ADRP + LDR/STR (memory access)
-                else if ((next_insn.id == ARM64_INS_LDR || next_insn.id == ARM64_INS_STR) && next_detail->arm64.op_count > 1 &&
-                         next_detail->arm64.operands[1].type == ARM64_OP_MEM && next_detail->arm64.operands[1].mem.base == adrp_dest_reg) {
-
-                    final_addr = page_addr + next_detail->arm64.operands[1].mem.disp;
-                    auto data_reg = static_cast<assembler::Register>(next_detail->arm64.operands[0].reg - ARM64_REG_X0);
-
-                    tramp_asm.gen_load_address(assembler::Register::X16, final_addr);
-                    if (next_insn.id == ARM64_INS_LDR) {
-                        tramp_asm.ldr(data_reg, assembler::Register::X16, 0);
-                    } else { // STR
-                        tramp_asm.str(data_reg, assembler::Register::X16, 0);
+                        final_addr = page_addr + std::get<int64_t>(next_insn.operands[2].value);
+                        auto dest_reg = std::get<assembler::Register>(next_insn.operands[0].value);
+                        tramp_asm.gen_load_address(dest_reg, final_addr);
+                        pair_relocated = true;
                     }
-                    pair_relocated = true;
+                    // Case 2: ADRP + LDR/STR (memory access)
+                    else if ((next_insn.id == disassembler::InstructionId::LDR || next_insn.id == disassembler::InstructionId::STR) && next_insn.operands.size() > 1 &&
+                             next_insn.operands[1].type == disassembler::OperandType::MEMORY) {
+                        auto mem_op = std::get<disassembler::MemOperand>(next_insn.operands[1].value);
+                        if (mem_op.base == adrp_dest_reg) {
+                            final_addr = page_addr + mem_op.displacement;
+                            auto data_reg = std::get<assembler::Register>(next_insn.operands[0].value);
+
+                            tramp_asm.gen_load_address(assembler::Register::X16, final_addr);
+                            if (next_insn.id == disassembler::InstructionId::LDR) {
+                                tramp_asm.ldr(data_reg, assembler::Register::X16, 0);
+                            } else { // STR
+                                tramp_asm.str(data_reg, assembler::Register::X16, 0);
+                            }
+                            pair_relocated = true;
+                        }
+                    }
+                }
+
+                if (pair_relocated) {
+                    backup_size += current_insn.size + instructions[i+1].size;
+                    i++; // Consumed two instructions
+                } else {
+                    // If not a recognized pair or last instruction, just relocate the ADRP itself.
+                    auto dest_reg = std::get<assembler::Register>(current_insn.operands[0].value);
+                    tramp_asm.gen_load_address(dest_reg, page_addr);
+                    backup_size += current_insn.size;
                 }
             }
-
-            if (pair_relocated) {
-                backup_size += current_insn.size + insn[i+1].size;
-                i++; // Consumed two instructions
-            } else {
-                // If not a recognized pair or last instruction, just relocate the ADRP itself.
-                auto dest_reg = static_cast<assembler::Register>(detail->arm64.operands[0].reg - ARM64_REG_X0);
-                tramp_asm.gen_load_address(dest_reg, page_addr);
-                backup_size += current_insn.size;
+            // Handle LDR (literal)
+            else if (current_insn.id == disassembler::InstructionId::LDR_LIT) {
+                 uintptr_t target_addr = std::get<int64_t>(current_insn.operands[1].value);
+                 auto dest_reg = std::get<assembler::Register>(current_insn.operands[0].value);
+                 tramp_asm.gen_load_address(assembler::Register::X16, target_addr);
+                 tramp_asm.ldr(dest_reg, assembler::Register::X16, 0);
+                 backup_size += current_insn.size;
             }
-        }
-        // Handle LDR (literal)
-        else if (current_insn.id == ARM64_INS_LDR && detail->arm64.op_count > 1 && detail->arm64.operands[1].type == ARM64_OP_IMM) {
-             uintptr_t target_addr = detail->arm64.operands[1].imm;
-             auto dest_reg = static_cast<assembler::Register>(detail->arm64.operands[0].reg - ARM64_REG_X0);
-             tramp_asm.gen_load_address(assembler::Register::X16, target_addr);
-             tramp_asm.ldr(dest_reg, assembler::Register::X16, 0);
-             backup_size += current_insn.size;
-        }
-        // Handle branches
-        else {
-            bool is_branch = false;
-            for (int j = 0; j < detail->groups_count; ++j) {
-                if (detail->groups[j] == ARM64_GRP_JUMP || detail->groups[j] == ARM64_GRP_BRANCH_RELATIVE) {
-                    is_branch = true;
-                    break;
-                }
-            }
+            // Handle branches
+            else if (current_insn.group == disassembler::InstructionGroup::JUMP) {
+                uintptr_t target_addr = std::get<int64_t>(current_insn.operands[0].value);
 
-            if (is_branch) {
-                uintptr_t target_addr = detail->arm64.operands[0].imm;
-
-                if (current_insn.id == ARM64_INS_B && detail->arm64.cc != ARM64_CC_AL) {
-                    auto cond = static_cast<assembler::Condition>(detail->arm64.cc);
-                    tramp_asm.b(cond, target_addr);
+                if (current_insn.id == disassembler::InstructionId::B_COND) {
+                    tramp_asm.b(current_insn.cond, target_addr);
                 } else {
                     tramp_asm.gen_load_address(assembler::Register::X16, target_addr);
-                    if (current_insn.id == ARM64_INS_BL) {
+                    if (current_insn.id == disassembler::InstructionId::BL) {
                         tramp_asm.blr(assembler::Register::X16);
-                    } else {
+                    } else { // B, CBZ, CBNZ, TBZ, TBNZ etc.
                         tramp_asm.br(assembler::Register::X16);
                     }
                 }
                 backup_size += current_insn.size;
             } else {
-                // Not a PC-relative instruction, just copy it
-                uint32_t instruction_word = *reinterpret_cast<const uint32_t*>(current_insn.bytes);
+                 // Other PC-relative, copy it for now. This might be an issue.
+                uint32_t instruction_word = *reinterpret_cast<const uint32_t*>(current_insn.bytes.data());
                 tramp_asm.get_code_mut().push_back(instruction_word);
                 backup_size += current_insn.size;
             }
+        } else {
+            // Not a PC-relative instruction, just copy it
+            uint32_t instruction_word = *reinterpret_cast<const uint32_t*>(current_insn.bytes.data());
+            tramp_asm.get_code_mut().push_back(instruction_word);
+            backup_size += current_insn.size;
         }
 
         if (backup_size >= required_size) break;
     }
 
-    cs_free(insn, count);
     return tramp_asm.get_code();
 }
 
@@ -218,12 +194,14 @@ std::vector<uint32_t> relocate_trampoline(uintptr_t target, uintptr_t trampoline
 
 // --- Hook Class Implementation ---
 
-Hook::Hook(uintptr_t target, Callback callback) {
-    if (target == 0 || callback == nullptr) {
-        throw std::invalid_argument("Target and callback must not be null");
+Hook::Hook(uintptr_t target, Callback callback, bool enable_now) {
+    if (target == 0) {
+        throw std::invalid_argument("Target must not be null");
+    }
+     if (callback == nullptr && enable_now) {
+        throw std::invalid_argument("Callback must not be null if hook is enabled immediately");
     }
 
-    thread::suspend_all_other_threads();
     try {
         std::lock_guard<std::mutex> lock(g_hooks_mutex);
         if (g_hooks.find(target) == g_hooks.end()) {
@@ -266,33 +244,57 @@ Hook::Hook(uintptr_t target, Callback callback) {
             original_func_ = info.trampoline;
         } else {
             original_func_ = info.entries.front().callback;
+            info.entries.front().call_next = callback;
         }
 
-        info.entries.push_front({this, callback, nullptr});
+        info.entries.push_front({this, callback, info.trampoline});
         
-        patch_target(target, reinterpret_cast<uintptr_t>(callback));
-        is_enabled_ = true;
+        if (enable_now) {
+            patch_target(target, reinterpret_cast<uintptr_t>(callback));
+            is_enabled_ = true;
+        } else {
+            is_enabled_ = false;
+        }
     } catch (...) {
-        thread::resume_all_other_threads();
         throw;
     }
-    thread::resume_all_other_threads();
 }
 
 Hook::~Hook() {
     unhook();
 }
 
+void Hook::set_detour(Callback callback) {
+    if (!is_valid()) return;
+    
+    std::lock_guard<std::mutex> lock(g_hooks_mutex);
+    auto it = g_hooks.find(target_address_);
+    if (it == g_hooks.end()) return;
+
+    auto& info = *it->second;
+    std::lock_guard<std::mutex> info_lock(info.info_mutex);
+
+    auto entry_it = std::find_if(info.entries.begin(), info.entries.end(), 
+        [this](const HookEntry& entry) { return entry.owner == this; });
+
+    if (entry_it != info.entries.end()) {
+        entry_it->callback = callback;
+        this->callback_ = callback;
+        
+        // If this is the currently active hook, re-patch the target
+        if (is_enabled_ && info.entries.front().owner == this) {
+            patch_target(target_address_, reinterpret_cast<uintptr_t>(callback));
+        }
+    }
+}
+
 void Hook::do_unhook() {
     if (!is_valid()) return;
-
-    thread::suspend_all_other_threads();
 
     std::lock_guard<std::mutex> lock(g_hooks_mutex);
     auto it = g_hooks.find(target_address_);
     if (it == g_hooks.end()) {
         reset();
-        thread::resume_all_other_threads();
         return;
     }
 
@@ -303,6 +305,15 @@ void Hook::do_unhook() {
         [this](const HookEntry& entry) { return entry.owner == this; });
 
     if (entry_it != info.entries.end()) {
+        auto next_it = std::next(entry_it);
+        if (entry_it != info.entries.begin()) {
+            auto prev_it = std::prev(entry_it);
+            if (next_it != info.entries.end()) {
+                prev_it->call_next = next_it->callback;
+            } else {
+                prev_it->call_next = info.trampoline;
+            }
+        }
         info.entries.erase(entry_it);
     }
 
@@ -315,25 +326,24 @@ void Hook::do_unhook() {
     }
 
     reset();
-    thread::resume_all_other_threads();
 }
 
 void Hook::unhook() {
-    if (is_enabled_) {
-        do_unhook();
-    }
+    // No need to check is_enabled_ here, unhook should work even if disabled.
+    do_unhook();
 }
 
 bool Hook::enable() {
     if (!is_valid() || is_enabled_) {
         return false;
     }
+     if (callback_ == nullptr) { // Cannot enable a hook without a detour
+        return false;
+    }
 
-    thread::suspend_all_other_threads();
     std::lock_guard<std::mutex> lock(g_hooks_mutex);
     auto it = g_hooks.find(target_address_);
     if (it == g_hooks.end()) {
-        thread::resume_all_other_threads();
         return false;
     }
 
@@ -358,7 +368,6 @@ bool Hook::enable() {
     }
 
     is_enabled_ = true;
-    thread::resume_all_other_threads();
     return true;
 }
 
@@ -367,11 +376,9 @@ bool Hook::disable() {
         return false;
     }
 
-    thread::suspend_all_other_threads();
     std::lock_guard<std::mutex> lock(g_hooks_mutex);
     auto it = g_hooks.find(target_address_);
     if (it == g_hooks.end()) {
-        thread::resume_all_other_threads();
         return false;
     }
 
@@ -396,7 +403,6 @@ bool Hook::disable() {
     }
 
     is_enabled_ = false;
-    thread::resume_all_other_threads();
     return true;
 }
 
@@ -447,7 +453,21 @@ Hook& Hook::operator=(Hook&& other) noexcept {
 }
 
 bool Hook::is_valid() const {
-    return target_address_ != 0 && callback_ != nullptr && original_func_ != nullptr;
+    return target_address_ != 0;
+}
+
+uintptr_t Hook::get_trampoline() const {
+    if (!is_valid()) {
+        return 0;
+    }
+    std::lock_guard<std::mutex> lock(g_hooks_mutex);
+    auto it = g_hooks.find(target_address_);
+    if (it == g_hooks.end()) {
+        return 0;
+    }
+    auto& info = *it->second;
+    std::lock_guard<std::mutex> info_lock(info.info_mutex);
+    return reinterpret_cast<uintptr_t>(info.trampoline);
 }
 
 void Hook::reset() {

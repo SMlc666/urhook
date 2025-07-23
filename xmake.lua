@@ -6,9 +6,6 @@ set_symbols("debug")
 
 target("urhook")
     set_kind("static")
-    add_packages("capstone",{
-      public = true
-    })
     add_files("src/**.cpp")
     add_includedirs("include",{
       public = true
@@ -17,6 +14,7 @@ target("urhook")
 target("tests")
     set_kind("binary")
     add_packages("gtest")
+    add_packages("capstone")
     add_deps("urhook")
     add_files("src-test/*.cpp")
     

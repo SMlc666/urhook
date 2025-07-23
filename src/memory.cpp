@@ -96,5 +96,46 @@ namespace ur {
             maps_file.close();
             return false;
         }
+
+        bool atomic_patch(uintptr_t address, const uint8_t* patch_code, size_t patch_size) {
+            if (patch_size == 0) return true;
+
+            // Ensure memory is writable and executable
+            if (!protect(address, patch_size, PROT_READ | PROT_WRITE | PROT_EXEC)) {
+                return false;
+            }
+
+            // For larger patches, use a two-step write to ensure atomicity.
+            // This is a common strategy to avoid race conditions where a thread
+            // might execute a partially written instruction sequence.
+            if (patch_size > 4) {
+                // 1. Write all but the first 4 bytes.
+                if (!write(address + 4, patch_code + 4, patch_size - 4)) {
+                    // Best effort to restore original protection, but failure here is already an error state.
+                    protect(address, patch_size, PROT_READ | PROT_EXEC);
+                    return false;
+                }
+            }
+
+            // 2. Write the first 4 bytes. This makes the patch "live".
+            // On ARM64, a 32-bit write is atomic.
+            if (!write(address, patch_code, 4)) {
+                // If the final atomic write fails, we are in a bad state.
+                // The patch is partially applied. Reverting is complex and may also fail.
+                protect(address, patch_size, PROT_READ | PROT_EXEC);
+                return false;
+            }
+
+            // Restore original permissions
+            if (!protect(address, patch_size, PROT_READ | PROT_EXEC)) {
+                // The patch is live, but permissions are not ideal.
+                // This is a non-fatal error for the patch itself, but should be noted.
+            }
+
+            // Flush the instruction cache to ensure the CPU sees the new instructions.
+            flush_instruction_cache(address, patch_size);
+
+            return true;
+        }
     }
 }

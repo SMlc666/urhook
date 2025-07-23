@@ -1,6 +1,5 @@
 #include <ur/vmt_hook.h>
 #include <ur/memory.h>
-#include <ur/thread.h>
 
 #include <sys/mman.h>
 #include <utility>
@@ -58,12 +57,10 @@ bool ur::VmHook::enable() {
     if (vmt_entry_address_ == nullptr || is_enabled_) {
         return false;
     }
-    thread::suspend_all_other_threads();
     ur::memory::protect(reinterpret_cast<uintptr_t>(vmt_entry_address_), sizeof(void*), PROT_READ | PROT_WRITE);
     ur::memory::write(reinterpret_cast<uintptr_t>(vmt_entry_address_), &hook_function_, sizeof(void*));
     ur::memory::protect(reinterpret_cast<uintptr_t>(vmt_entry_address_), sizeof(void*), PROT_READ);
     is_enabled_ = true;
-    thread::resume_all_other_threads();
     return true;
 }
 
@@ -71,11 +68,9 @@ bool ur::VmHook::disable() {
     if (vmt_entry_address_ == nullptr || !is_enabled_) {
         return false;
     }
-    thread::suspend_all_other_threads();
     ur::memory::protect(reinterpret_cast<uintptr_t>(vmt_entry_address_), sizeof(void*), PROT_READ | PROT_WRITE);
     ur::memory::write(reinterpret_cast<uintptr_t>(vmt_entry_address_), &original_function_, sizeof(void*));
     ur::memory::protect(reinterpret_cast<uintptr_t>(vmt_entry_address_), sizeof(void*), PROT_READ);
     is_enabled_ = false;
-    thread::resume_all_other_threads();
     return true;
 }

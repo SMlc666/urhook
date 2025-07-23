@@ -27,7 +27,7 @@ class Hook {
 public:
     using Callback = void*;
 
-    Hook(uintptr_t target, Callback callback);
+    Hook(uintptr_t target, Callback callback, bool enable_now = true);
     ~Hook();
 
     Hook(const Hook&) = delete;
@@ -37,6 +37,10 @@ public:
     Hook& operator=(Hook&& other) noexcept;
 
     bool is_valid() const;
+
+    uintptr_t get_trampoline() const;
+
+    void set_detour(Callback callback);
 
     /**
      * @brief Manually unhooks the function, restoring the original code.

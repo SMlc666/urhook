@@ -28,5 +28,8 @@ namespace ur {
 
         // 刷新指令缓存
         void flush_instruction_cache(uintptr_t address, size_t size);
+
+        // 原子地写入内存补丁
+        bool atomic_patch(uintptr_t address, const uint8_t* patch_code, size_t patch_size);
     }
 }

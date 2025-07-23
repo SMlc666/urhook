@@ -2,8 +2,13 @@
 
 #include <cstdint>
 #include <functional>
-#include <vector>
+#include <memory>
+#include <optional>
 #include "ur/jit.h"
+
+namespace ur::inline_hook {
+class Hook;
+}
 
 namespace ur::mid_hook {
 
@@ -12,7 +17,7 @@ namespace ur::mid_hook {
  * The layout is x0-x28, fp(x29), lr(x30).
  */
 struct CpuContext {
-    uint64_t gpr[31];
+    uint64_t gpr[32];
 };
 
 using Callback = void (*)(CpuContext* context);
@@ -20,10 +25,10 @@ using Callback = void (*)(CpuContext* context);
 /**
  * @brief A class for creating a hook in the middle of a function (Mid-Hook).
  *
- * This class overwrites instructions at the target address with a jump
- * to a dynamically generated detour. The detour saves the CPU context, calls a
- * user-provided callback, restores the context, executes the original instructions,
- * and finally jumps back. It uses an absolute jump to support long-distance detours.
+ * This class uses an InlineHook to redirect the target function to a detour.
+ * The detour saves the CPU context, calls a user-provided callback, restores
+ * the context, and then executes the original instructions via the trampoline
+ * provided by the InlineHook.
  */
 class MidHook {
 public:
@@ -32,7 +37,7 @@ public:
      * @param target The address within a function to hook.
      * @param callback The callback function to be executed when the hook is hit.
      * @throws std::invalid_argument if target or callback are null.
-     * @throws std::runtime_error if memory operations fail.
+     * @throws std::runtime_error if memory operations or hooking fail.
      */
     MidHook(uintptr_t target, Callback callback);
 
@@ -73,19 +78,18 @@ public:
     bool disable();
 
 private:
-    void do_hook();
-    void do_unhook();
     void reset();
+    static void dummy_callback(void*);
 
-    static constexpr size_t JUMP_INSTRUCTION_SIZE = assembler::Assembler::ABS_JUMP_SIZE;
-
-    uintptr_t target_address_{0};
+    // The user-provided callback.
     Callback callback_{nullptr};
-    std::vector<uint8_t> original_instructions_{};
-    std::vector<uint8_t> branch_instructions_{};
+
+    // The JIT-compiled detour function that calls the user callback.
     std::optional<ur::jit::Jit> detour_jit_;
     void* detour_{nullptr};
-    bool is_enabled_{false};
+
+    // The underlying inline hook that redirects the target to our detour.
+    std::unique_ptr<ur::inline_hook::Hook> inline_hook_;
 };
 
 } // namespace ur::mid_hook
