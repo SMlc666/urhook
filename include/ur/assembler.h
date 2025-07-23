@@ -7,6 +7,7 @@ namespace ur::assembler {
 
 // A64 registers
 enum class Register {
+    INVALID = -1,
     X0, X1, X2, X3, X4, X5, X6, X7, X8, X9, X10, X11, X12, X13, X14, X15,
     X16, X17, X18, X19, X20, X21, X22, X23, X24, X25, X26, X27, X28,
     FP = 29, // Frame Pointer
@@ -47,6 +48,20 @@ enum class NeonArrangement {
     D1, D2
 };
 
+enum class SystemRegister {
+    NZCV,
+    FPCR,
+    FPSR,
+    TPIDR_EL0,
+};
+
+enum class BarrierOption {
+    OSH,
+    NSH,
+    ISH,
+    SY,
+};
+
 class Assembler {
 public:
     explicit Assembler(uintptr_t start_address);
@@ -73,6 +88,8 @@ public:
     // Compare and branch instructions
     void cbz(Register rt, uintptr_t target_address);
     void cbnz(Register rt, uintptr_t target_address);
+    void tbz(Register rt, uint32_t bit, uintptr_t target_address);
+    void tbnz(Register rt, uint32_t bit, uintptr_t target_address);
 
     // Data processing - immediate
     void add(Register rd, Register rn, uint16_t imm, bool shift = false);
@@ -94,8 +111,17 @@ public:
     void and_(Register rd, Register rn, Register rm);
     void orr(Register rd, Register rn, Register rm);
     void eor(Register rd, Register rn, Register rm);
+    void bic(Register rd, Register rn, Register rm);
+    void mvn(Register rd, Register rm);
+    void lsl(Register rd, Register rn, uint32_t shift);
+    void lsr(Register rd, Register rn, uint32_t shift);
+    void asr(Register rd, Register rn, uint32_t shift);
     void cmp(Register rn, Register rm);
     void cset(Register rd, Condition cond);
+    void csel(Register rd, Register rn, Register rm, Condition cond);
+    void csinc(Register rd, Register rn, Register rm, Condition cond);
+    void csinv(Register rd, Register rn, Register rm, Condition cond);
+    void csneg(Register rd, Register rn, Register rm, Condition cond);
 
     // Multiply and divide
     void mul(Register rd, Register rn, Register rm);
@@ -132,6 +158,13 @@ public:
     void stur(Register rt, Register rn, int32_t offset = 0);
     void ldp(Register rt1, Register rt2, Register rn, int32_t offset, bool post_index = false);
     void stp(Register rt1, Register rt2, Register rn, int32_t offset, bool pre_index = false);
+    void ldrh(Register rt, Register rn, int32_t offset = 0);
+    void ldrb(Register rt, Register rn, int32_t offset = 0);
+    void ldrsw(Register rt, Register rn, int32_t offset = 0);
+    void ldrsh(Register rt, Register rn, int32_t offset = 0);
+    void ldrsb(Register rt, Register rn, int32_t offset = 0);
+    void strh(Register rt, Register rn, int32_t offset = 0);
+    void strb(Register rt, Register rn, int32_t offset = 0);
     
     // PC-relative load
     void ldr_literal(Register rt, int64_t offset);
@@ -144,14 +177,41 @@ public:
     // System instructions
     void nop();
     void svc(uint16_t imm);
+    void mrs(Register rt, SystemRegister sys_reg);
+    void msr(SystemRegister sys_reg, Register rt);
+
+    // Memory Barrier Instructions
+    void dmb(BarrierOption option);
+    void dsb(BarrierOption option);
+    void isb();
+
+    // Exclusive Access Instructions
+    void ldxr(Register rt, Register rn);
+    void stxr(Register rs, Register rt, Register rn);
+    void ldaxr(Register rt, Register rn);
+    void stlxr(Register rs, Register rt, Register rn);
+
+    // Load-Acquire/Store-Release Instructions
+    void ldar(Register rt, Register rn);
+    void stlr(Register rt, Register rn);
 
     // NEON Data Processing instructions
     void neon_add(Register rd, Register rn, Register rm, NeonArrangement arr);
-    void neon_sub(Register rd, Register rn, Register rm, NeonArrangement arr);
+    void neon_and(Register rd, Register rn, Register rm, NeonArrangement arr);
+    void neon_orr(Register rd, Register rn, Register rm, NeonArrangement arr);
+    void neon_eor(Register rd, Register rn, Register rm, NeonArrangement arr);
     void neon_mul(Register rd, Register rn, Register rm, NeonArrangement arr);
+    // NEON Compare instructions
+    void neon_cmeq(Register rd, Register rn, Register rm, NeonArrangement arr);
+    void neon_cmgt(Register rd, Register rn, Register rm, NeonArrangement arr);
+    void neon_cmge(Register rd, Register rn, Register rm, NeonArrangement arr);
 
+    // NEON Floating-point instructions
+    void neon_fadd(Register rd, Register rn, Register rm, NeonArrangement arr);
+    void neon_fdiv(Register rd, Register rn, Register rm, NeonArrangement arr);
+    void neon_fcmeq(Register rd, Register rn, Register rm, NeonArrangement arr);
+    
     // NEON Load/Store instructions
-    void neon_ldr(Register rt, Register rn, int32_t offset = 0);
     void neon_str(Register rt, Register rn, int32_t offset = 0);
 
     // Pseudo-code instructions

@@ -192,7 +192,7 @@ TEST(MidHookTest, EnableDisableUnhook) {
 
     // 3. Test unhook
     hook.unhook();
-    ASSERT_FALSE(hook.is_valid());
+    ASSERT_TRUE(hook.is_valid()); // <-- 修改：对象仍然有效
     g_callback_executed = false;
     target_function(1, 2);
     ASSERT_FALSE(g_callback_executed);

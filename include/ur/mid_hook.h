@@ -82,7 +82,8 @@ private:
     uintptr_t target_address_{0};
     Callback callback_{nullptr};
     std::vector<uint8_t> original_instructions_{};
-    jit::Jit detour_jit_{}; // Owns the JIT-compiled detour memory
+    std::vector<uint8_t> branch_instructions_{};
+    std::optional<ur::jit::Jit> detour_jit_;
     void* detour_{nullptr};
     bool is_enabled_{false};
 };

@@ -4,6 +4,8 @@
 #include <vector>
 #include <memory>
 #include <string>
+#include <variant>
+#include "ur/assembler.h" // For Register and Condition enums
 
 namespace ur {
     namespace disassembler {
@@ -41,6 +43,24 @@ namespace ur {
             LDR_LIT,
             // System
             NOP,
+            // More data processing
+            MOVN,
+            // More branches
+            TBZ,
+            TBNZ,
+            // Floating-point / SIMD
+            FMOV,
+            FADD,
+            FSUB,
+            FMUL,
+            FDIV,
+            SCVTF,
+            FCVTZS,
+            // Load/Store Exclusive
+            LDXR,
+            STXR,
+            // Bitfield
+            UBFM,
         };
 
         enum class InstructionGroup {
@@ -49,6 +69,25 @@ namespace ur {
             DATA_PROCESSING,
             LOAD_STORE,
             SYSTEM,
+            FLOAT_SIMD,
+        };
+
+        enum class OperandType {
+            INVALID,
+            REGISTER,
+            IMMEDIATE,
+            MEMORY,
+        };
+
+        struct MemOperand {
+            assembler::Register base = assembler::Register::INVALID;
+            assembler::Register index = assembler::Register::INVALID;
+            int32_t displacement = 0;
+        };
+
+        struct Operand {
+            OperandType type = OperandType::INVALID;
+            std::variant<std::monostate, assembler::Register, int64_t, MemOperand> value;
         };
 
         // Represents a single disassembled instruction.
@@ -61,6 +100,10 @@ namespace ur {
             std::string mnemonic; // e.g., "mov", "add"
             std::string op_str;   // e.g., "x0, x1"
             bool is_pc_relative = false;
+
+            // Enhanced operand information
+            std::vector<Operand> operands;
+            assembler::Condition cond = assembler::Condition::AL;
         };
 
         // Abstract base class for a disassembler.

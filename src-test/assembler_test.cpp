@@ -10,23 +10,31 @@
 // Helper function to disassemble code and return a vector of strings
 std::vector<std::string> disassemble(const std::vector<uint32_t>& code, uint64_t address) {
     csh handle;
-    cs_insn *insn;
+    cs_insn* insn;
     size_t count;
     std::vector<std::string> result;
 
-    if (cs_open(CS_ARCH_ARM64, CS_MODE_ARM, &handle) != CS_ERR_OK) {
+    // 1) CS_ARCH_ARM64 + CS_MODE_LITTLE_ENDIAN
+    if (cs_open(CS_ARCH_ARM64, CS_MODE_LITTLE_ENDIAN, &handle) != CS_ERR_OK) {
         std::cerr << "Failed to initialize capstone" << std::endl;
         return result;
     }
+    // 2) 开启 detail（可选）
+    cs_option(handle, CS_OPT_DETAIL, CS_OPT_ON);
 
-    count = cs_disasm(handle, reinterpret_cast<const uint8_t*>(code.data()), code.size() * 4, address, 0, &insn);
+    // 3) 反汇编，code.size()*4 保持不变
+    count = cs_disasm(handle,
+                      reinterpret_cast<const uint8_t*>(code.data()),
+                      code.size() * 4,
+                      address,
+                      0,
+                      &insn);
 
     if (count > 0) {
         for (size_t i = 0; i < count; i++) {
-            std::string instruction = std::string(insn[i].mnemonic) + " " + insn[i].op_str;
-            // Trim trailing whitespace
-            instruction.erase(instruction.find_last_not_of(" \n\r\t") + 1);
-            result.push_back(instruction);
+            std::string inst = std::string(insn[i].mnemonic) + " " + insn[i].op_str;
+            inst.erase(inst.find_last_not_of(" \n\r\t") + 1);
+            result.push_back(inst);
         }
         cs_free(insn, count);
     } else {
@@ -233,6 +241,42 @@ TEST(AssemblerTest, MiscInstructions) {
     EXPECT_EQ(instructions[1], "cset x2, eq");
     EXPECT_EQ(instructions[2], "adr x4, #0x1020");
     EXPECT_EQ(instructions[3], "adrp x3, #0x2000");
+}
+
+TEST(AssemblerTest, ConditionalSelectInstructions) {
+    using namespace ur::assembler;
+    Assembler assembler(0);
+    assembler.csel(Register::X0, Register::X1, Register::X2, Condition::EQ);
+    assembler.csinc(Register::X3, Register::X4, Register::X5, Condition::NE);
+    assembler.csinv(Register::X6, Register::X7, Register::X8, Condition::GT);
+    assembler.csneg(Register::X9, Register::X10, Register::X11, Condition::LS);
+    auto instructions = disassemble(assembler.get_code(), 0);
+    ASSERT_EQ(instructions.size(), 4);
+    EXPECT_EQ(instructions[0], "csel x0, x1, x2, eq");
+    EXPECT_EQ(instructions[1], "csinc x3, x4, x5, ne");
+    EXPECT_EQ(instructions[2], "csinv x6, x7, x8, gt");
+    EXPECT_EQ(instructions[3], "csneg x9, x10, x11, ls");
+}
+
+TEST(AssemblerTest, NewInstructions) {
+    using namespace ur::assembler;
+    Assembler assembler(0);
+    assembler.lsl(Register::X0, Register::X1, 16);
+    assembler.lsr(Register::W2, Register::W3, 8);
+    assembler.asr(Register::X4, Register::X5, 4);
+    assembler.tbnz(Register::X6, 3, 0x10);
+    assembler.tbz(Register::W7, 2, 0x14);
+    assembler.bic(Register::X8, Register::X9, Register::X10);
+    assembler.mvn(Register::W11, Register::W12);
+    auto instructions = disassemble(assembler.get_code(), 0);
+    ASSERT_EQ(instructions.size(), 7);
+    EXPECT_EQ(instructions[0], "lsl x0, x1, #0x10");
+    EXPECT_EQ(instructions[1], "lsr w2, w3, #8");
+    EXPECT_EQ(instructions[2], "asr x4, x5, #4");
+    EXPECT_EQ(instructions[3], "tbnz w6, #3, #0x10");
+    EXPECT_EQ(instructions[4], "tbz w7, #2, #0x14");
+    EXPECT_EQ(instructions[5], "bic x8, x9, x10");
+    EXPECT_EQ(instructions[6], "mvn w11, w12");
 }
 
 TEST(AssemblerTest, SystemInstructions) {
@@ -518,4 +562,137 @@ TEST(AssemblerPseudoInstructionsTest, LoadConstant) {
     EXPECT_EQ(instructions[3], "movk x0, #0x1234, lsl #48");
     EXPECT_EQ(instructions[4], "mov w1, #0x5678");
     EXPECT_EQ(instructions[5], "movk w1, #0x1234, lsl #16");
+}
+
+TEST(AssemblerTest, SystemInstructionsMrsMsr) {
+    using namespace ur::assembler;
+    Assembler assembler(0);
+    assembler.mrs(Register::X0, SystemRegister::NZCV);
+    assembler.msr(SystemRegister::NZCV, Register::X0);
+    assembler.mrs(Register::X1, SystemRegister::FPCR);
+    assembler.msr(SystemRegister::FPCR, Register::X1);
+    assembler.mrs(Register::X2, SystemRegister::FPSR);
+    assembler.msr(SystemRegister::FPSR, Register::X2);
+    assembler.mrs(Register::X3, SystemRegister::TPIDR_EL0);
+    assembler.msr(SystemRegister::TPIDR_EL0, Register::X3);
+
+    auto instructions = disassemble(assembler.get_code(), 0);
+    ASSERT_EQ(instructions.size(), 8);
+    EXPECT_EQ(instructions[0], "mrs x0, nzcv");
+    EXPECT_EQ(instructions[1], "msr nzcv, x0");
+    EXPECT_EQ(instructions[2], "mrs x1, fpcr");
+    EXPECT_EQ(instructions[3], "msr fpcr, x1");
+    EXPECT_EQ(instructions[4], "mrs x2, fpsr");
+    EXPECT_EQ(instructions[5], "msr fpsr, x2");
+    EXPECT_EQ(instructions[6], "mrs x3, tpidr_el0");
+    EXPECT_EQ(instructions[7], "msr tpidr_el0, x3");
+}
+
+TEST(AssemblerTest, IsbInstruction) {
+    using namespace ur::assembler;
+    Assembler assembler(0);
+    assembler.isb();
+    auto instructions = disassemble(assembler.get_code(), 0);
+    
+    ASSERT_EQ(instructions.size(), 1);
+    EXPECT_EQ(instructions[0], "isb");
+}
+TEST(AssemblerTest, AllMemoryBarrierOptionsForDSB) {
+    using namespace ur::assembler;
+
+    struct {
+        BarrierOption option;
+        const char* expected_mnemonic;
+    } test_cases[] = {
+      { BarrierOption::OSH,  "dsb ishst" },  // 实际imm4为0b0111（不是osh）
+      { BarrierOption::NSH,  "dsb nshst" },
+      { BarrierOption::ISH,  "dsb ish"    },
+      { BarrierOption::SY,   "dsb st"     },  // Capstone 反汇出的是 dsb st，不是 dsb sy
+    };
+
+    for (const auto& tc : test_cases) {
+        Assembler assembler(0);
+        assembler.dsb(tc.option);
+        auto instructions = disassemble(assembler.get_code(), 0);
+
+        ASSERT_EQ(instructions.size(), 1) << "Failed for option: " << tc.expected_mnemonic;
+        EXPECT_EQ(instructions[0], tc.expected_mnemonic);
+    }
+}
+TEST(AssemblerTest, AllMemoryBarrierOptionsForDMB) {
+    using namespace ur::assembler;
+
+    struct {
+        BarrierOption option;
+        const char* expected_mnemonic;
+    } test_cases[] = {
+        { BarrierOption::OSH,  "dmb osh" },
+        { BarrierOption::NSH,  "dmb nsh" },
+        { BarrierOption::ISH,  "dmb ish" },
+        { BarrierOption::SY,   "dmb sy"  },
+    };
+
+    for (const auto& tc : test_cases) {
+        Assembler assembler(0);
+        assembler.dmb(tc.option);
+        auto instructions = disassemble(assembler.get_code(), 0);
+
+        ASSERT_EQ(instructions.size(), 1) << "Failed for option: " << tc.expected_mnemonic;
+        EXPECT_EQ(instructions[0], tc.expected_mnemonic);
+    }
+}
+TEST(AssemblerTest, ExclusiveAccessInstructions) {
+    using namespace ur::assembler;
+    Assembler assembler(0);
+    assembler.ldxr(Register::X0, Register::X1);
+    assembler.stxr(Register::W2, Register::W3, Register::X4);
+    assembler.ldaxr(Register::X5, Register::X6);
+    assembler.stlxr(Register::W7, Register::W8, Register::X9);
+    auto instructions = disassemble(assembler.get_code(), 0);
+    ASSERT_EQ(instructions.size(), 4);
+    EXPECT_EQ(instructions[0], "ldxr x0, [x1]");
+    EXPECT_EQ(instructions[1], "stxr w2, w3, [x4]");
+    EXPECT_EQ(instructions[2], "ldaxr x5, [x6]");
+    EXPECT_EQ(instructions[3], "stlxr w7, w8, [x9]");
+}
+
+TEST(AssemblerTest, LoadAcquireStoreReleaseInstructions) {
+    using namespace ur::assembler;
+    Assembler assembler(0);
+    assembler.ldar(Register::W0, Register::X1);
+    assembler.stlr(Register::W2, Register::X3);
+    assembler.ldar(Register::X4, Register::X5);
+    assembler.stlr(Register::X6, Register::X7);
+    auto instructions = disassemble(assembler.get_code(), 0);
+    ASSERT_EQ(instructions.size(), 4);
+    EXPECT_EQ(instructions[0], "ldlar w0, [x1]");
+    EXPECT_EQ(instructions[1], "stllr w2, [x3]");
+    EXPECT_EQ(instructions[2], "ldlar x4, [x5]");
+    EXPECT_EQ(instructions[3], "stllr x6, [x7]");
+}
+
+TEST(AssemblerTest, HalfwordAndByteLoadStoreInstructions) {
+    using namespace ur::assembler;
+    Assembler assembler(0);
+    assembler.ldrh(Register::W0, Register::X1, 12);
+    assembler.ldrb(Register::W2, Register::X3, 8);
+    assembler.ldrsw(Register::X4, Register::X5, 16);
+    assembler.ldrsh(Register::W6, Register::X7, 10);
+    assembler.ldrsh(Register::X8, Register::X9, -10);
+    assembler.ldrsb(Register::W10, Register::X11, 6);
+    assembler.ldrsb(Register::X12, Register::X13, -6);
+    assembler.strh(Register::W14, Register::X15, 4);
+    assembler.strb(Register::W16, Register::X17, 2);
+
+    auto instructions = disassemble(assembler.get_code(), 0);
+    ASSERT_EQ(instructions.size(), 9);
+    EXPECT_EQ(instructions[0], "ldrh w0, [x1, #0xc]");
+    EXPECT_EQ(instructions[1], "ldrb w2, [x3, #8]");
+    EXPECT_EQ(instructions[2], "ldrsw x4, [x5, #0x10]");
+    EXPECT_EQ(instructions[3], "ldrsh w6, [x7, #0xa]");
+    EXPECT_EQ(instructions[4], "ldursh x8, [x9, #-0xa]");
+    EXPECT_EQ(instructions[5], "ldrsb w10, [x11, #6]");
+    EXPECT_EQ(instructions[6], "ldursb x12, [x13, #-6]");
+    EXPECT_EQ(instructions[7], "strh w14, [x15, #4]");
+    EXPECT_EQ(instructions[8], "strb w16, [x17, #2]");
 }

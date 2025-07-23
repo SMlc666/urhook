@@ -23,6 +23,27 @@ namespace {
     bool is_fp_register(Register reg) {
         return is_s_register(reg) || is_d_register(reg) || is_q_register(reg);
     }
+
+    uint32_t to_sys_reg(SystemRegister sys_reg) {
+        // This encoding is a bit complex. It's composed of op0, op1, CRn, CRm, op2 fields.
+        // Let's represent them as a single value for simplicity here.
+        // The format is: op0:2, op1:3, CRn:4, CRm:4, op2:3
+        switch (sys_reg) {
+            case SystemRegister::NZCV:
+                // op0=1, op1=3, CRn=4, CRm=2, op2=0 -> 1_011_0100_0010_000
+                return (1 << 19) | (3 << 16) | (4 << 12) | (2 << 8) | (0 << 5);
+            case SystemRegister::FPCR:
+                // op0=1, op1=3, CRn=4, CRm=4, op2=0 -> 1_011_0100_0100_000
+                return (1 << 19) | (3 << 16) | (4 << 12) | (4 << 8) | (0 << 5);
+            case SystemRegister::FPSR:
+                 // op0=1, op1=3, CRn=4, CRm=4, op2=1 -> 1_011_0100_0100_001
+                return (1 << 19) | (3 << 16) | (4 << 12) | (4 << 8) | (1 << 5);
+            case SystemRegister::TPIDR_EL0:
+                // op0=1, op1=3, CRn=13, CRm=0, op2=2 -> 1_011_1101_0000_010
+                return (1 << 19) | (3 << 16) | (13 << 12) | (0 << 8) | (2 << 5);
+        }
+        throw std::runtime_error("Unsupported system register");
+    }
 }
 
 Assembler::Assembler(uintptr_t start_address) : current_address_(start_address) {}
@@ -120,6 +141,26 @@ void Assembler::cbnz(Register rt, uintptr_t target_address) {
     if (offset < 0 || offset > 524284) throw std::runtime_error("CBNZ offset out of range");
     uint32_t imm19 = (static_cast<uint32_t>(offset) >> 2) & 0x7FFFF;
     emit(0xB5000000 | (imm19 << 5) | to_reg(rt));
+}
+
+void Assembler::tbz(Register rt, uint32_t bit, uintptr_t target_address) {
+    if (bit >= (is_w_register(rt) ? 32 : 64)) throw std::runtime_error("TBZ bit out of range");
+    int64_t offset = target_address - current_address_;
+    if (offset < -32768 || offset > 32767) throw std::runtime_error("TBZ offset out of range");
+    uint32_t b5 = (bit >> 5) & 1;
+    uint32_t b40 = bit & 0x1F;
+    uint32_t imm14 = (static_cast<uint32_t>(offset) >> 2) & 0x3FFF;
+    emit(0x36000000 | (b5 << 31) | (b40 << 19) | (imm14 << 5) | to_reg(rt));
+}
+
+void Assembler::tbnz(Register rt, uint32_t bit, uintptr_t target_address) {
+    if (bit >= (is_w_register(rt) ? 32 : 64)) throw std::runtime_error("TBNZ bit out of range");
+    int64_t offset = target_address - current_address_;
+    if (offset < -32768 || offset > 32767) throw std::runtime_error("TBNZ offset out of range");
+    uint32_t b5 = (bit >> 5) & 1;
+    uint32_t b40 = bit & 0x1F;
+    uint32_t imm14 = (static_cast<uint32_t>(offset) >> 2) & 0x3FFF;
+    emit(0x37000000 | (b5 << 31) | (b40 << 19) | (imm14 << 5) | to_reg(rt));
 }
 
 void Assembler::add(Register rd, Register rn, uint16_t imm, bool shift) {
@@ -228,6 +269,48 @@ void Assembler::eor(Register rd, Register rn, Register rm) {
     emit((sf << 31) | 0x4A000000 | (to_reg(rm) << 16) | (to_reg(rn) << 5) | to_reg(rd));
 }
 
+void Assembler::bic(Register rd, Register rn, Register rm) {
+    uint32_t sf = is_w_register(rd) ? 0 : 1;
+    emit((sf << 31) | 0x0A200000 | (to_reg(rm) << 16) | (to_reg(rn) << 5) | to_reg(rd));
+}
+
+void Assembler::mvn(Register rd, Register rm) {
+    uint32_t sf = is_w_register(rd) ? 0 : 1;
+    Register zr = sf ? Register::ZR : Register::WZR;
+    // MVN rd, rm is an alias for ORN rd, zr, rm
+    emit((sf << 31) | 0x2A200000 | (to_reg(rm) << 16) | (to_reg(zr) << 5) | to_reg(rd));
+}
+
+void Assembler::lsl(Register rd, Register rn, uint32_t shift) {
+    uint32_t sf = is_w_register(rd) ? 0 : 1;
+    unsigned reg_size = sf ? 64 : 32;
+    if (shift >= reg_size) throw std::runtime_error("LSL shift amount out of range");
+    uint32_t immr = (reg_size - shift) % reg_size;
+    uint32_t imms = reg_size - 1 - shift;
+    // LSL is an alias for UBFM
+    emit((sf << 31) | (sf << 22) | 0x53000000 | (immr << 16) | (imms << 10) | (to_reg(rn) << 5) | to_reg(rd));
+}
+
+void Assembler::lsr(Register rd, Register rn, uint32_t shift) {
+    uint32_t sf = is_w_register(rd) ? 0 : 1;
+    unsigned reg_size = sf ? 64 : 32;
+    if (shift >= reg_size) throw std::runtime_error("LSR shift amount out of range");
+    uint32_t immr = shift;
+    uint32_t imms = reg_size - 1;
+    // LSR is an alias for UBFM
+    emit((sf << 31) | (sf << 22) | 0x53000000 | (immr << 16) | (imms << 10) | (to_reg(rn) << 5) | to_reg(rd));
+}
+
+void Assembler::asr(Register rd, Register rn, uint32_t shift) {
+    uint32_t sf = is_w_register(rd) ? 0 : 1;
+    unsigned reg_size = sf ? 64 : 32;
+    if (shift >= reg_size) throw std::runtime_error("ASR shift amount out of range");
+    uint32_t immr = shift;
+    uint32_t imms = reg_size - 1;
+    // ASR is an alias for SBFM
+    emit((sf << 31) | (sf << 22) | 0x13000000 | (immr << 16) | (imms << 10) | (to_reg(rn) << 5) | to_reg(rd));
+}
+
 void Assembler::cmp(Register rn, Register rm) {
     sub(is_w_register(rn) ? Register::WZR : Register::ZR, rn, rm);
 }
@@ -236,6 +319,26 @@ void Assembler::cset(Register rd, Condition cond) {
     uint32_t sf = is_w_register(rd) ? 0 : 1;
     Condition inverted_cond = static_cast<Condition>(static_cast<uint32_t>(cond) ^ 1);
     emit((sf << 31) | 0x1A800400 | to_reg(rd) | (to_cond(inverted_cond) << 12) | (to_reg(is_w_register(rd) ? Register::WZR : Register::ZR) << 5) | (to_reg(is_w_register(rd) ? Register::WZR : Register::ZR) << 16));
+}
+
+void Assembler::csel(Register rd, Register rn, Register rm, Condition cond) {
+    uint32_t sf = is_w_register(rd) ? 0 : 1;
+    emit((sf << 31) | 0x1A800000 | (to_reg(rm) << 16) | (to_cond(cond) << 12) | (to_reg(rn) << 5) | to_reg(rd));
+}
+
+void Assembler::csinc(Register rd, Register rn, Register rm, Condition cond) {
+    uint32_t sf = is_w_register(rd) ? 0 : 1;
+    emit((sf << 31) | 0x1A800400 | (to_reg(rm) << 16) | (to_cond(cond) << 12) | (to_reg(rn) << 5) | to_reg(rd));
+}
+
+void Assembler::csinv(Register rd, Register rn, Register rm, Condition cond) {
+    uint32_t sf = is_w_register(rd) ? 0 : 1;
+    emit((sf << 31) | 0x5A800000 | (to_reg(rm) << 16) | (to_cond(cond) << 12) | (to_reg(rn) << 5) | to_reg(rd));
+}
+
+void Assembler::csneg(Register rd, Register rn, Register rm, Condition cond) {
+    uint32_t sf = is_w_register(rd) ? 0 : 1;
+    emit((sf << 31) | 0x5A800400 | (to_reg(rm) << 16) | (to_cond(cond) << 12) | (to_reg(rn) << 5) | to_reg(rd));
 }
 
 void Assembler::mul(Register rd, Register rn, Register rm) {
@@ -417,6 +520,122 @@ void Assembler::stur(Register rt, Register rn, int32_t offset) {
     emit((size << 30) | 0x38000000 | (imm9 << 12) | (to_reg(rn) << 5) | to_reg(rt));
 }
 
+void Assembler::ldrh(Register rt, Register rn, int32_t offset) {
+    if (!is_w_register(rt)) throw std::runtime_error("LDRH requires a W register target");
+    // Unsigned immediate
+    if (offset >= 0 && offset < 4096 * 2 && (offset % 2 == 0)) {
+        uint32_t imm12 = (offset >> 1) & 0xFFF;
+        emit(0x79400000 | (imm12 << 10) | (to_reg(rn) << 5) | to_reg(rt));
+    } else if (offset >= -256 && offset < 256) { // Unscaled immediate
+        uint32_t imm9 = offset & 0x1FF;
+        emit(0x78400000 | (imm9 << 12) | (to_reg(rn) << 5) | to_reg(rt));
+    } else {
+        throw std::runtime_error("LDRH offset out of range");
+    }
+}
+
+void Assembler::ldrb(Register rt, Register rn, int32_t offset) {
+    if (!is_w_register(rt)) throw std::runtime_error("LDRB requires a W register target");
+    // Unsigned immediate
+    if (offset >= 0 && offset < 4096) {
+        uint32_t imm12 = offset & 0xFFF;
+        emit(0x39400000 | (imm12 << 10) | (to_reg(rn) << 5) | to_reg(rt));
+    } else if (offset >= -256 && offset < 256) { // Unscaled immediate
+        uint32_t imm9 = offset & 0x1FF;
+        emit(0x38400000 | (imm9 << 12) | (to_reg(rn) << 5) | to_reg(rt));
+    } else {
+        throw std::runtime_error("LDRB offset out of range");
+    }
+}
+
+void Assembler::ldrsw(Register rt, Register rn, int32_t offset) {
+    if (!is_x_register(rt)) throw std::runtime_error("LDRSW requires an X register target");
+    // Unsigned immediate
+    if (offset >= 0 && offset < 4096 * 4 && (offset % 4 == 0)) {
+        uint32_t imm12 = (offset >> 2) & 0xFFF;
+        emit(0xB9800000 | (imm12 << 10) | (to_reg(rn) << 5) | to_reg(rt));
+    } else if (offset >= -256 && offset < 256) { // Unscaled immediate
+        uint32_t imm9 = offset & 0x1FF;
+        emit(0xB8800000 | (imm9 << 12) | (to_reg(rn) << 5) | to_reg(rt));
+    } else {
+        throw std::runtime_error("LDRSW offset out of range");
+    }
+}
+
+void Assembler::ldrsh(Register rt, Register rn, int32_t offset) {
+    uint32_t op_scaled, op_unscaled;
+    if (is_w_register(rt)) {
+        op_scaled = 0x79C00000;
+        op_unscaled = 0x78C00000;
+    } else if (is_x_register(rt)) {
+        op_scaled = 0x79800000;
+        op_unscaled = 0x78800000;
+    } else {
+        throw std::runtime_error("LDRSH requires a W or X register target");
+    }
+
+    if (offset >= 0 && offset < 4096 * 2 && (offset % 2 == 0)) {
+        uint32_t imm12 = (offset >> 1) & 0xFFF;
+        emit(op_scaled | (imm12 << 10) | (to_reg(rn) << 5) | to_reg(rt));
+    } else if (offset >= -256 && offset < 256) {
+        uint32_t imm9 = offset & 0x1FF;
+        emit(op_unscaled | (imm9 << 12) | (to_reg(rn) << 5) | to_reg(rt));
+    } else {
+        throw std::runtime_error("LDRSH offset out of range");
+    }
+}
+
+void Assembler::ldrsb(Register rt, Register rn, int32_t offset) {
+    uint32_t op_scaled, op_unscaled;
+    if (is_w_register(rt)) {
+        op_scaled = 0x39C00000;
+        op_unscaled = 0x38C00000;
+    } else if (is_x_register(rt)) {
+        op_scaled = 0x39800000;
+        op_unscaled = 0x38800000;
+    } else {
+        throw std::runtime_error("LDRSB requires a W or X register target");
+    }
+
+    if (offset >= 0 && offset < 4096) {
+        uint32_t imm12 = offset & 0xFFF;
+        emit(op_scaled | (imm12 << 10) | (to_reg(rn) << 5) | to_reg(rt));
+    } else if (offset >= -256 && offset < 256) {
+        uint32_t imm9 = offset & 0x1FF;
+        emit(op_unscaled | (imm9 << 12) | (to_reg(rn) << 5) | to_reg(rt));
+    } else {
+        throw std::runtime_error("LDRSB offset out of range");
+    }
+}
+
+void Assembler::strh(Register rt, Register rn, int32_t offset) {
+    if (!is_w_register(rt)) throw std::runtime_error("STRH requires a W register source");
+    // Unsigned immediate
+    if (offset >= 0 && offset < 4096 * 2 && (offset % 2 == 0)) {
+        uint32_t imm12 = (offset >> 1) & 0xFFF;
+        emit(0x79000000 | (imm12 << 10) | (to_reg(rn) << 5) | to_reg(rt));
+    } else if (offset >= -256 && offset < 256) { // Unscaled immediate
+        uint32_t imm9 = offset & 0x1FF;
+        emit(0x78000000 | (imm9 << 12) | (to_reg(rn) << 5) | to_reg(rt));
+    } else {
+        throw std::runtime_error("STRH offset out of range");
+    }
+}
+
+void Assembler::strb(Register rt, Register rn, int32_t offset) {
+    if (!is_w_register(rt)) throw std::runtime_error("STRB requires a W register source");
+    // Unsigned immediate
+    if (offset >= 0 && offset < 4096) {
+        uint32_t imm12 = offset & 0xFFF;
+        emit(0x39000000 | (imm12 << 10) | (to_reg(rn) << 5) | to_reg(rt));
+    } else if (offset >= -256 && offset < 256) { // Unscaled immediate
+        uint32_t imm9 = offset & 0x1FF;
+        emit(0x38000000 | (imm9 << 12) | (to_reg(rn) << 5) | to_reg(rt));
+    } else {
+        throw std::runtime_error("STRB offset out of range");
+    }
+}
+
 void Assembler::ldp(Register rt1, Register rt2, Register rn, int32_t offset, bool post_index) {
     uint32_t opc = is_w_register(rt1) ? 0 : 2;
     int scale = is_w_register(rt1) ? 2 : 3;
@@ -478,6 +697,84 @@ void Assembler::nop() {
 
 void Assembler::svc(uint16_t imm) {
     emit(0xD4000001 | (static_cast<uint32_t>(imm) << 5));
+}
+
+void Assembler::mrs(Register rt, SystemRegister sys_reg) {
+    emit(0xD5300000 | to_sys_reg(sys_reg) | to_reg(rt));
+}
+
+void Assembler::msr(SystemRegister sys_reg, Register rt) {
+    emit(0xD5100000 | to_sys_reg(sys_reg) | to_reg(rt));
+}
+
+void Assembler::dmb(BarrierOption option) {
+    uint32_t imm4;
+    switch (option) {
+        case BarrierOption::OSH: imm4 = 0b0011; break;
+        case BarrierOption::NSH: imm4 = 0b0111; break;
+        case BarrierOption::ISH: imm4 = 0b1011; break;
+        case BarrierOption::SY:  imm4 = 0b1111; break;
+        default: throw std::runtime_error("Invalid barrier option");
+    }
+    emit(0xD50330BF | (imm4 << 8));
+}
+
+void Assembler::dsb(BarrierOption option) {
+    uint32_t imm4;
+    switch (option) {
+        case BarrierOption::OSH: imm4 = 0b1010; break;
+        case BarrierOption::NSH: imm4 = 0b0110; break;
+        case BarrierOption::ISH: imm4 = 0b1011; break;
+        case BarrierOption::SY:  imm4 = 0b1110; break;
+        default: throw std::runtime_error("Invalid barrier option");
+    }
+    emit(0xD503309F | (imm4 << 8));
+}
+
+void Assembler::isb() {
+    emit(0xD5033FDF); // ISB SY
+}
+
+void Assembler::ldxr(Register rt, Register rn) {
+    uint32_t size = is_w_register(rt) ? 2 : 3;
+    emit((size << 30) | 0x085F7C00 | (to_reg(rn) << 5) | to_reg(rt));
+}
+
+void Assembler::stxr(Register rs, Register rt, Register rn) {
+    uint32_t size = is_w_register(rt) ? 2 : 3;
+    emit(
+        (size << 30) |
+        0x08007C00 |                // ← STXR 正确 opcode base
+        (to_reg(rs) << 16) |
+        (to_reg(rn) << 5) |
+        to_reg(rt)
+    );
+}
+void Assembler::ldaxr(Register rt, Register rn) {
+    uint32_t size = is_w_register(rt) ? 2 : 3;
+    emit((size << 30) | 0x085F7C00 | (1 << 15) | (to_reg(rn) << 5) | to_reg(rt));
+}
+
+void Assembler::stlxr(Register rs, Register rt, Register rn) {
+    // rs = status/result reg; rt = data reg; rn = address reg
+    uint32_t size = is_w_register(rt) ? 2 : 3;         // W → 2, X → 3
+    constexpr uint32_t STLXR_BASE = 0x0800FC00u;       // bit15 + bit23 set
+    uint32_t instr = 
+          (size << 30)    // [31:30]
+        | STLXR_BASE      // [29:0] 中的 opcode + fixed bits
+        | (to_reg(rs) << 16) 
+        | (to_reg(rn) << 5)
+        | to_reg(rt);
+    emit(instr);
+}
+void Assembler::ldar(Register rt, Register rn) {
+    uint32_t size = is_w_register(rt) ? 2 : 3;
+    emit((size << 30) | 0x08DF7C00 | (to_reg(rn) << 5) | to_reg(rt));
+}
+
+void Assembler::stlr(Register rt, Register rn) {
+    uint32_t size = is_w_register(rt) ? 2 : 3;
+    emit((size << 30) | 0x089F7C00 | (to_reg(rn) << 5) | to_reg(rt));
 }
 
 void Assembler::call_function(uintptr_t destination) {
