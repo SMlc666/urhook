@@ -9,8 +9,8 @@
 ### 核心特性
 
 - **静态解析方法**: 提供一个简单的静态方法 `parse()` 来获取当前进程的所有内存映射。
+- **独立的内存段信息**: 每个内存段都表示为一个独立的 `MapInfo` 对象，不再进行合并。
 - **便捷的查找功能**: 提供了 `find_map_by_addr` 和 `find_map_by_path` 等辅助函数，方便快速定位特定的内存区域。
-- **与 `ElfParser` 集成**: 每个 `MapInfo` 对象都可以按需创建一个关联的 `ElfParser` 实例，用于进一步解析该内存区域对应的 ELF 文件。
 
 ### API 概览
 
@@ -36,9 +36,6 @@ public:
     uintptr_t get_end() const;
     const std::string& get_perms() const; // e.g., "r-xp"
     const std::string& get_path() const;  // e.g., "/system/lib64/libc.so"
-    
-    // 按需创建并缓存 ElfParser
-    elf_parser::ElfParser* get_elf_parser(); 
 };
 ```
 
@@ -77,7 +74,7 @@ explicit ElfParser(uintptr_t base_address);
 
 ### 1. 查找 `libc.so` 中 `fopen` 函数的地址
 
-这是一个典型的用例：在运行时动态定位一个库函数的位置。
+这是一个典型的用例：在运行时动态定位一个库函数的位置。新的工作流程需要手动从内存映射中找到库的基地址，然后创建 `ElfParser`。
 
 ```cpp
 #include <ur/maps_parser.h>
@@ -93,22 +90,31 @@ void find_fopen_example() {
         return;
     }
 
-    // 2. 找到 libc.so 的内存区域
-    const ur::maps_parser::MapInfo* libc_map = ur::maps_parser::MapsParser::find_map_by_path(maps, "libc.so");
-    if (!libc_map) {
+    // 2. 遍历 maps，找到 libc.so 的基地址
+    // 基地址通常是该库所有内存段中最低的起始地址
+    uintptr_t libc_base = 0;
+    for (const auto& map : maps) {
+        if (map.get_path().find("libc.so") != std::string::npos) {
+            if (libc_base == 0 || map.get_start() < libc_base) {
+                libc_base = map.get_start();
+            }
+        }
+    }
+
+    if (libc_base == 0) {
         std::cerr << "Failed to find libc.so in memory maps." << std::endl;
         return;
     }
 
-    // 3. 从 MapInfo 获取 ElfParser 实例
-    ur::elf_parser::ElfParser* parser = libc_map->get_elf_parser();
-    if (!parser) {
-        std::cerr << "Failed to get ELF parser for libc.so." << std::endl;
+    // 3. 使用基地址创建 ElfParser 实例
+    ur::elf_parser::ElfParser parser(libc_base);
+    if (!parser.parse()) {
+        std::cerr << "Failed to parse ELF for libc.so." << std::endl;
         return;
     }
 
     // 4. 使用 ElfParser 查找符号地址
-    uintptr_t fopen_addr = parser->find_symbol("fopen");
+    uintptr_t fopen_addr = parser.find_symbol("fopen");
 
     if (fopen_addr != 0) {
         std::cout << "Found fopen via UrHook: 0x" << std::hex << fopen_addr << std::endl;

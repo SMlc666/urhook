@@ -26,6 +26,12 @@ explicit VmtHook(void* instance);
 
 - `instance`: 指向要 Hook 的类实例的指针。
 
+```cpp
+explicit VmtHook(void** vmt_address);
+```
+
+- `vmt_address`: 指向虚函数表（VMT）的指针。这为直接通过虚函数表地址进行 Hook 提供了另一种方式。
+
 #### `hook_method(std::size_t index, void* hook_function)`
 
 Hook 虚函数表中的一个特定函数。

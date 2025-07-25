@@ -35,7 +35,7 @@ UrHook 是一个专注于 aarch64 架构的 Android Hook 库。它旨在提供�
 
 UrHook 的 API 被设计为模块化和可组合的。下面是核心组件的文档链接：
 
-- **[Hooking APIs](./) (即将推出)**
+- **[Hooking APIs](./)**
   - **[`inline_hook`](./inline_hook.md)**: 在函数入口进行 Hook。
   - **[`mid_hook`](./mid_hook.md)**: 在函数中间的任意位置进行 Hook。
   - **[`vmt_hook`](./vmt_hook.md)**: 针对 C++ 虚函数表的 Hook。
