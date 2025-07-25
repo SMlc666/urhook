@@ -37,61 +37,34 @@ namespace ur::maps_parser {
 
     std::vector<MapInfo> MapsParser::parse() {
         std::vector<MapInfo> maps;
-        std::map<std::string, MapInfo*> path_map;
         std::ifstream file("/proc/self/maps");
         std::string line;
 
         while (std::getline(file, line)) {
             std::stringstream ss(line);
-            std::uintptr_t start, end;
-            std::string perms, path;
-            std::size_t offset;
+            uintptr_t start, end, offset;
+            std::string perms, dev, path;
+            ino_t inode;
             char dash;
 
-            ss >> std::hex >> start >> dash >> end >> perms;
-            ss.seekg(35); // Move to offset position
-            ss >> std::hex >> offset;
-
+            ss >> std::hex >> start >> dash >> end >> perms >> offset >> dev >> inode;
+            
+            // After the inode, there might be whitespace before the path
             ss >> std::ws;
             std::getline(ss, path);
 
-            if (path.empty() || path[0] == '[') {
-                maps.emplace_back(start, end, perms, offset, path);
-                continue;
-            }
-
-            auto it = path_map.find(path);
-            if (it == path_map.end()) {
-                maps.emplace_back(start, end, perms, offset, path);
-                path_map[path] = &maps.back();
-            } else {
-                // Extend the existing map region and merge permissions
-                it->second->m_end = end;
-                if (perms.find('r') != std::string::npos && it->second->m_perms.find('r') == std::string::npos) it->second->m_perms += 'r';
-                if (perms.find('w') != std::string::npos && it->second->m_perms.find('w') == std::string::npos) it->second->m_perms += 'w';
-                if (perms.find('x') != std::string::npos && it->second->m_perms.find('x') == std::string::npos) it->second->m_perms += 'x';
-            }
+            maps.emplace_back(start, end, perms, offset, path);
         }
         return maps;
     }
 
     const MapInfo* MapsParser::find_map_by_path(const std::vector<MapInfo>& maps, const std::string& path) {
-        auto it = std::find_if(maps.begin(), maps.end(), [&](const MapInfo& info) {
+        for (const auto& info : maps) {
             if (info.get_path() == path) {
-                return true;
+                return &info;
             }
-            // Also check if the path ends with the given path, e.g. /apex/.../libc.so for libc.so
-            if (!info.get_path().empty() && info.get_path().length() > path.length()) {
-                if (info.get_path().substr(info.get_path().length() - path.length()) == path) {
-                    // Check if the character before the match is a '/'
-                    if (info.get_path()[info.get_path().length() - path.length() - 1] == '/') {
-                        return true;
-                    }
-                }
-            }
-            return false;
-        });
-        return it != maps.end() ? &(*it) : nullptr;
+        }
+        return nullptr;
     }
 
     const MapInfo* MapsParser::find_map_by_addr(const std::vector<MapInfo>& maps, std::uintptr_t addr) {

@@ -16,4 +16,6 @@ target("tests")
     add_packages("capstone")
     add_deps("urhook")
     add_files("src-test/*.cpp")
+    add_links("dl")
+    add_ldflags("-rdynamic")
     

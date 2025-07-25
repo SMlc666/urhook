@@ -8,6 +8,8 @@ ur::VmtHook::VmtHook(void* instance) {
     vmt_address_ = *static_cast<void***>(instance);
 }
 
+ur::VmtHook::VmtHook(void** vmt_address) : vmt_address_(vmt_address) {}
+
 std::unique_ptr<ur::VmHook> ur::VmtHook::hook_method(std::size_t index, void* hook_function) {
     void** vmt_entry_address = vmt_address_ + index;
     void* original_function = *vmt_entry_address;

@@ -8,7 +8,8 @@ namespace ur {
 
     class VmtHook {
     public:
-        explicit VmtHook(void* instance);
+                explicit VmtHook(void* instance);
+        explicit VmtHook(void** vmt_address);
         ~VmtHook() = default;
 
         VmtHook(const VmtHook&) = delete;
