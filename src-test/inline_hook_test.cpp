@@ -421,3 +421,78 @@ TEST_F(InlineHookTest, EnableDisableUnhook) {
     ASSERT_TRUE(g_hook_call_log.empty());
     ASSERT_EQ(result, 3);
 }
+
+// --- Race Condition Test ---
+
+namespace {
+    std::atomic<bool> g_race_test_stop_flag{false};
+    std::atomic<long long> g_race_call_count{0};
+    std::atomic<long long> g_race_hooked_call_count{0};
+
+    __attribute__((noinline)) int race_target_func(int a, int b) {
+        g_race_call_count++;
+        // A little work to prevent the compiler optimizing too much.
+        for (volatile int i = 0; i < 5; ++i) {}
+        return a - b;
+    }
+
+    int race_hook_callback(int a, int b) {
+        g_race_hooked_call_count++;
+        return a + b; // Change the behavior
+    }
+}
+
+TEST_F(InlineHookTest, MultiThreadedRaceOnHook) {
+    std::cout << "--- Running MultiThreadedRaceOnHook Test ---" << std::endl;
+    // Note: This test verifies the thread-safety of the patching mechanism.
+    // However, its success under GTest may be intermittent in release builds
+    // due to the previously identified incompatibility between GTest and this library.
+
+    g_race_test_stop_flag = false;
+    g_race_call_count = 0;
+    g_race_hooked_call_count = 0;
+
+    const int num_threads = 8;
+    std::vector<std::thread> threads;
+
+    // Start threads to hammer the target function
+    for (int i = 0; i < num_threads; ++i) {
+        threads.emplace_back([]() {
+            while (!g_race_test_stop_flag) {
+                race_target_func(10, 5);
+            }
+        });
+    }
+
+    // Give the threads a moment to start hammering
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+
+    // Hook the function while it's being hammered
+    ur::inline_hook::Hook hook(
+        reinterpret_cast<uintptr_t>(&race_target_func),
+        reinterpret_cast<ur::inline_hook::Hook::Callback>(&race_hook_callback)
+    );
+    // If the test crashes, it will be here or in the worker threads.
+    // A successful hook creation without crash is a good sign.
+    ASSERT_TRUE(hook.is_valid());
+
+    // Let the test run for a bit longer with the hook active
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+
+    // Stop the threads
+    g_race_test_stop_flag = true;
+    for (auto& t : threads) {
+        t.join();
+    }
+
+    // Final check
+    std::cout << "  Total calls: " << g_race_call_count << std::endl;
+    std::cout << "  Hooked calls: " << g_race_hooked_call_count << std::endl;
+
+    // We expect that some calls went through before the hook was active,
+    // and some were caught by the hook.
+    EXPECT_GT(g_race_call_count, 0);
+    EXPECT_GT(g_race_hooked_call_count, 0);
+
+    std::cout << "--- MultiThreadedRaceOnHook Test Finished ---" << std::endl;
+}

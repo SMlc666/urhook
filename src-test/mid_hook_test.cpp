@@ -8,9 +8,9 @@
 #include <chrono>
 
 // Global flag to check if our callback was executed.
-static bool g_callback_executed = false;
+static std::atomic<bool> g_callback_executed = false;
 // Global variable to check if the context is passed correctly and modified.
-static uint64_t g_modified_register_value = 0;
+static std::atomic<uint64_t> g_original_arg1 = 0;
 
 // The function we are going to hook.
 // It's volatile to prevent the compiler from optimizing it away.
@@ -29,89 +29,91 @@ volatile int target_function_2(int a, int b) {
 }
 
 // The callback function for our MidHook.
-void hook_callback(ur::mid_hook::CpuContext* context) {
+// It modifies the first argument (a) to 100.
+void modifying_callback(ur::mid_hook::CpuContext* context) {
     g_callback_executed = true;
-    // Modify a register to test context passing.
-    // We'll modify a callee-saved register to see if it persists
-    // after the original function returns.
-    g_modified_register_value = 0xDEADBEEF;
-    context->gpr[19] = g_modified_register_value; // Modify X19
+    // Store the original value of the first argument (w0) for verification.
+    g_original_arg1 = context->gpr[0];
+    // Change the first argument to 100.
+    context->gpr[0] = 100;
 }
 
 // A simple callback that does nothing, for move tests.
 void dummy_callback(ur::mid_hook::CpuContext* context) {
-    // This callback does nothing.
+    g_callback_executed = true;
 }
 
 
 TEST(MidHookTest, BasicHook) {
     g_callback_executed = false;
-    g_modified_register_value = 0;
+    g_original_arg1 = 0;
     uintptr_t target_address = reinterpret_cast<uintptr_t>(&target_function);
 
-    ur::mid_hook::MidHook hook(target_address, &hook_callback);
+    ur::mid_hook::MidHook hook(target_address, &modifying_callback);
     ASSERT_TRUE(hook.is_valid());
 
-    // We need to check a callee-saved register before the call.
-    uint64_t x19_before;
-    asm volatile("mov %0, x19" : "=r"(x19_before));
-
+    // The hook will change the first argument 'a' from 5 to 100.
     volatile int result = target_function(5, 10);
-
-    // After the call, check if X19 was modified by our callback.
-    uint64_t x19_after;
-    asm volatile("mov %0, x19" : "=r"(x19_after));
 
     // Verify that the callback was executed.
     EXPECT_TRUE(g_callback_executed);
-    // Verify that the original function's logic was executed.
-    EXPECT_EQ(result, 15);
-    // Verify that our modification to the context was successful.
-    EXPECT_EQ(x19_after, g_modified_register_value);
-
-    // Restore X19 to its original value to not affect other tests.
-    asm volatile("mov x19, %0" : : "r"(x19_before));
+    // Verify that the callback received the correct original argument.
+    EXPECT_EQ(g_original_arg1, 5);
+    // Verify that the original function's logic was executed with the modified argument.
+    EXPECT_EQ(result, 110); // 100 + 10
 }
 
 TEST(MidHookTest, MoveConstruction) {
     g_callback_executed = false;
+    g_original_arg1 = 0;
     uintptr_t target_address = reinterpret_cast<uintptr_t>(&target_function);
 
-    ur::mid_hook::MidHook hook1(target_address, &hook_callback);
+    ur::mid_hook::MidHook hook1(target_address, &modifying_callback);
     ASSERT_TRUE(hook1.is_valid());
 
     ur::mid_hook::MidHook hook2(std::move(hook1));
     ASSERT_TRUE(hook2.is_valid());
     ASSERT_FALSE(hook1.is_valid()); // NOLINT
 
-    target_function(1, 2);
+    // The hook (now hook2) should change 'a' from 1 to 100.
+    volatile int result = target_function(1, 2);
     EXPECT_TRUE(g_callback_executed);
+    EXPECT_EQ(g_original_arg1, 1);
+    EXPECT_EQ(result, 102); // 100 + 2
 }
 
 TEST(MidHookTest, MoveAssignment) {
     g_callback_executed = false;
+    g_original_arg1 = 0;
     uintptr_t target_address1 = reinterpret_cast<uintptr_t>(&target_function);
     uintptr_t target_address2 = reinterpret_cast<uintptr_t>(&target_function_2);
 
-    ur::mid_hook::MidHook hook1(target_address1, &hook_callback);
+    ur::mid_hook::MidHook hook1(target_address1, &modifying_callback);
     ASSERT_TRUE(hook1.is_valid());
 
+    // Hook target_function_2 with a dummy callback that doesn't modify args
     ur::mid_hook::MidHook hook2(target_address2, &dummy_callback);
     ASSERT_TRUE(hook2.is_valid());
 
+    // Move assign hook1 to hook2. hook2 should now be hooking target_function_1
+    // and its original hook on target_function_2 should be gone.
     hook2 = std::move(hook1);
 
     ASSERT_TRUE(hook2.is_valid());
     ASSERT_FALSE(hook1.is_valid()); // NOLINT
 
-    // hook2 should now be hooking target_function_1 with hook_callback.
-    target_function(3, 4);
+    // hook2 should now be hooking target_function_1 with modifying_callback.
+    // It should change 'a' from 3 to 100.
+    volatile int result1 = target_function(3, 4);
     EXPECT_TRUE(g_callback_executed);
+    EXPECT_EQ(g_original_arg1, 3);
+    EXPECT_EQ(result1, 104); // 100 + 4
 
-    // target_function_2 should have been unhooked.
+    // target_function_2 should have been unhooked. The dummy_callback should not run.
     g_callback_executed = false; // Reset flag
-    target_function_2(5, 6);
+    volatile int result2 = target_function_2(5, 6);
     EXPECT_FALSE(g_callback_executed);
+    EXPECT_EQ(result2, 30); // 5 * 6
 }
 
 
@@ -119,7 +121,7 @@ TEST(MidHookTest, EnableDisableUnhook) {
     g_callback_executed = false;
     uintptr_t target_address = reinterpret_cast<uintptr_t>(&target_function);
 
-    ur::mid_hook::MidHook hook(target_address, &hook_callback);
+    ur::mid_hook::MidHook hook(target_address, &dummy_callback);
     ASSERT_TRUE(hook.is_valid());
 
     // 1. Test disable

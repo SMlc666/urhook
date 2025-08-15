@@ -6,7 +6,7 @@ namespace ur::jit {
 
     uint32_t Label::next_id_ = 0;
 
-    Jit::Jit(uintptr_t address) : Assembler(address) {}
+    Jit::Jit(uintptr_t address) : ur::assembler::Assembler(address) {}
 
     Jit::~Jit() {
         if (mem_ != nullptr) {
@@ -14,7 +14,7 @@ namespace ur::jit {
         }
     }
 
-    Jit::Jit(Jit&& other) noexcept : Assembler(std::move(other)) {
+    Jit::Jit(Jit&& other) noexcept : ur::assembler::Assembler(std::move(other)) {
         mem_ = other.mem_;
         size_ = other.size_;
         label_patches_ = std::move(other.label_patches_);
@@ -24,7 +24,7 @@ namespace ur::jit {
 
     Jit& Jit::operator=(Jit&& other) noexcept {
         if (this != &other) {
-            Assembler::operator=(std::move(other));
+            ur::assembler::Assembler::operator=(std::move(other));
             if (mem_ != nullptr) {
                 munmap(mem_, size_);
             }
@@ -79,22 +79,22 @@ namespace ur::jit {
     void Jit::b(Label& label) {
         if (label.is_bound()) {
             // If the label is already bound, we know the target address
-            Assembler::b(get_current_address() + (label.offset() - get_code_size()));
+            ur::assembler::Assembler::b(get_current_address() + (label.offset() - get_code_size()));
         } else {
             // Label is not bound yet, emit a placeholder and record for patching
             uint32_t current_offset = get_code_size();
             label.references_.push_back(current_offset);
-            Assembler::b(get_current_address()); // Emit B instruction pointing to itself
+            ur::assembler::Assembler::b(get_current_address()); // Emit B instruction pointing to itself
         }
     }
 
     void Jit::b(assembler::Condition cond, Label& label) {
         if (label.is_bound()) {
-            Assembler::b(cond, get_current_address() + (label.offset() - get_code_size()));
+            ur::assembler::Assembler::b(cond, get_current_address() + (label.offset() - get_code_size()));
         } else {
             uint32_t current_offset = get_code_size();
             label.references_.push_back(current_offset);
-            Assembler::b(cond, get_current_address()); // Emit B.cond pointing to itself
+            ur::assembler::Assembler::b(cond, get_current_address()); // Emit B.cond pointing to itself
         }
     }
 

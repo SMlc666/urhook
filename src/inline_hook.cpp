@@ -57,24 +57,15 @@ void free_executable_memory(void* mem, size_t size) {
 bool patch_target(uintptr_t target, uintptr_t destination) {
     assembler::Assembler assembler(target);
     assembler.gen_abs_jump(destination, assembler::Register::X16);
-    const auto& patch_code = assembler.get_code();
-    size_t patch_size = patch_code.size() * sizeof(uint32_t);
+    const auto& patch_code_vec = assembler.get_code();
+    const auto* patch_code = reinterpret_cast<const uint8_t*>(patch_code_vec.data());
+    size_t patch_size = patch_code_vec.size() * sizeof(uint32_t);
 
-    memory::protect(target, patch_size, PROT_READ | PROT_WRITE | PROT_EXEC);
-    bool result = memory::write(target, patch_code.data(), patch_size);
-    memory::protect(target, patch_size, PROT_READ | PROT_EXEC);
-    
-    __builtin___clear_cache(reinterpret_cast<char*>(target), reinterpret_cast<char*>(target + patch_size));
-    return result;
+    return memory::atomic_patch(target, patch_code, patch_size);
 }
 
 bool restore_target(HookInfo& info) {
-    memory::protect(info.target_address, info.backup_size, PROT_READ | PROT_WRITE | PROT_EXEC);
-    bool result = memory::write(info.target_address, info.original_code.data(), info.backup_size);
-    memory::protect(info.target_address, info.backup_size, PROT_READ | PROT_EXEC);
-
-    __builtin___clear_cache(reinterpret_cast<char*>(info.target_address), reinterpret_cast<char*>(info.target_address + info.backup_size));
-    return result;
+    return memory::atomic_patch(info.target_address, info.original_code.data(), info.backup_size);
 }
 
 // --- Trampoline Relocation Logic ---
@@ -240,21 +231,15 @@ Hook::Hook(uintptr_t target, Callback callback, bool enable_now) {
             __builtin___clear_cache(reinterpret_cast<char*>(info.trampoline), reinterpret_cast<char*>(info.trampoline) + trampoline_size);
         }
 
-        if (info.entries.empty()) {
-            original_func_ = info.trampoline;
-        } else {
-            original_func_ = info.entries.front().callback;
-            info.entries.front().call_next = callback;
-        }
+        void* next_func_to_call = info.entries.empty() ? info.trampoline : info.entries.front().callback;
+        original_func_ = next_func_to_call;
 
-        info.entries.push_front({this, callback, info.trampoline});
-        
+        info.entries.push_front({this, callback, next_func_to_call, enable_now});
+
         if (enable_now) {
             patch_target(target, reinterpret_cast<uintptr_t>(callback));
-            is_enabled_ = true;
-        } else {
-            is_enabled_ = false;
         }
+        is_enabled_ = enable_now;
     } catch (...) {
         throw;
     }
@@ -356,6 +341,7 @@ bool Hook::enable() {
     if (entry_it != info.entries.end()) {
         entry_it->is_enabled = true;
     }
+    is_enabled_ = true; // Update flag before patching
 
     // Re-patch to the first enabled hook
     auto first_enabled = std::find_if(info.entries.begin(), info.entries.end(),
@@ -367,7 +353,6 @@ bool Hook::enable() {
         restore_target(info);
     }
 
-    is_enabled_ = true;
     return true;
 }
 
@@ -391,6 +376,7 @@ bool Hook::disable() {
     if (entry_it != info.entries.end()) {
         entry_it->is_enabled = false;
     }
+    is_enabled_ = false; // Update flag before patching
 
     // Re-patch to the first enabled hook
     auto first_enabled = std::find_if(info.entries.begin(), info.entries.end(),
@@ -402,7 +388,6 @@ bool Hook::disable() {
         restore_target(info);
     }
 
-    is_enabled_ = false;
     return true;
 }
 

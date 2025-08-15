@@ -1,7 +1,7 @@
-#include "ur/assembler.h"
+#include "ur/assembler/arm64-v8a/assembler.h"
 #include <stdexcept>
 
-namespace ur::assembler {
+namespace ur::assembler::arm64 {
 
 namespace {
     bool is_s_register(Register reg) {
@@ -30,7 +30,7 @@ namespace {
     }
 }
 
-void Assembler::neon_add(Register rd, Register rn, Register rm, NeonArrangement arr) {
+void AssemblerAArch64::neon_add(Register rd, Register rn, Register rm, NeonArrangement arr) {
     uint32_t Q;
     uint32_t size = to_neon_arrangement(arr, Q);
     emit(0x0E208400 | (Q << 30) | (size << 22) | (to_reg(rm) << 16) | (to_reg(rn) << 5) | to_reg(rd));
@@ -38,43 +38,43 @@ void Assembler::neon_add(Register rd, Register rn, Register rm, NeonArrangement 
 
 
 
-void Assembler::neon_mul(Register rd, Register rn, Register rm, NeonArrangement arr) {
+void AssemblerAArch64::neon_mul(Register rd, Register rn, Register rm, NeonArrangement arr) {
     uint32_t Q;
     uint32_t size = to_neon_arrangement(arr, Q);
     emit(0x0E209C00 | (Q << 30) | (size << 22) | (to_reg(rm) << 16) | (to_reg(rn) << 5) | to_reg(rd));
 }
 
-void Assembler::neon_and(Register rd, Register rn, Register rm, NeonArrangement arr) {
+void AssemblerAArch64::neon_and(Register rd, Register rn, Register rm, NeonArrangement arr) {
     uint32_t Q;
     uint32_t size = to_neon_arrangement(arr, Q);
     emit(0x0E200400 | (Q << 30) | (size << 22) | (to_reg(rm) << 16) | (to_reg(rn) << 5) | to_reg(rd));
 }
 
-void Assembler::neon_orr(Register rd, Register rn, Register rm, NeonArrangement arr) {
+void AssemblerAArch64::neon_orr(Register rd, Register rn, Register rm, NeonArrangement arr) {
     uint32_t Q;
     uint32_t size = to_neon_arrangement(arr, Q);
     emit(0x0E200C00 | (Q << 30) | (size << 22) | (to_reg(rm) << 16) | (to_reg(rn) << 5) | to_reg(rd));
 }
 
-void Assembler::neon_eor(Register rd, Register rn, Register rm, NeonArrangement arr) {
+void AssemblerAArch64::neon_eor(Register rd, Register rn, Register rm, NeonArrangement arr) {
     uint32_t Q;
     uint32_t size = to_neon_arrangement(arr, Q);
     emit(0x2E200400 | (Q << 30) | (size << 22) | (to_reg(rm) << 16) | (to_reg(rn) << 5) | to_reg(rd));
 }
 
-void Assembler::neon_cmeq(Register rd, Register rn, Register rm, NeonArrangement arr) {
+void AssemblerAArch64::neon_cmeq(Register rd, Register rn, Register rm, NeonArrangement arr) {
     uint32_t Q;
     uint32_t size = to_neon_arrangement(arr, Q);
     emit(0x2E208C00 | (Q << 30) | (size << 22) | (to_reg(rm) << 16) | (to_reg(rn) << 5) | to_reg(rd));
 }
 
-void Assembler::neon_cmgt(Register rd, Register rn, Register rm, NeonArrangement arr) {
+void AssemblerAArch64::neon_cmgt(Register rd, Register rn, Register rm, NeonArrangement arr) {
     uint32_t Q;
     uint32_t size = to_neon_arrangement(arr, Q);
     emit(0x0E203400 | (Q << 30) | (size << 22) | (to_reg(rm) << 16) | (to_reg(rn) << 5) | to_reg(rd));
 }
 
-void Assembler::neon_cmge(Register rd, Register rn, Register rm, NeonArrangement arr) {
+void AssemblerAArch64::neon_cmge(Register rd, Register rn, Register rm, NeonArrangement arr) {
     uint32_t Q;
     uint32_t size = to_neon_arrangement(arr, Q);
     emit(0x0E203C00 | (Q << 30) | (size << 22) | (to_reg(rm) << 16) | (to_reg(rn) << 5) | to_reg(rd));
@@ -93,7 +93,7 @@ namespace {
     }
 }
 
-void Assembler::neon_fadd(Register rd, Register rn, Register rm, NeonArrangement arr) {
+void AssemblerAArch64::neon_fadd(Register rd, Register rn, Register rm, NeonArrangement arr) {
     uint32_t Q;
     uint32_t sz = to_fp_neon_arrangement(arr, Q);
     emit(0x0E20D400 | (Q << 30) | (sz << 22) | (to_reg(rm) << 16) | (to_reg(rn) << 5) | to_reg(rd));
@@ -102,13 +102,13 @@ void Assembler::neon_fadd(Register rd, Register rn, Register rm, NeonArrangement
 
 
 
-void Assembler::neon_fdiv(Register rd, Register rn, Register rm, NeonArrangement arr) {
+void AssemblerAArch64::neon_fdiv(Register rd, Register rn, Register rm, NeonArrangement arr) {
     uint32_t Q;
     uint32_t sz = to_fp_neon_arrangement(arr, Q);
     emit(0x2E20FC00 | (Q << 30) | (sz << 22) | (to_reg(rm) << 16) | (to_reg(rn) << 5) | to_reg(rd));
 }
 
-void Assembler::neon_fcmeq(Register rd, Register rn, Register rm, NeonArrangement arr) {
+void AssemblerAArch64::neon_fcmeq(Register rd, Register rn, Register rm, NeonArrangement arr) {
     uint32_t Q;
     uint32_t sz = to_fp_neon_arrangement(arr, Q);
     emit(0x0E20E400 | (Q << 30) | (sz << 22) | (to_reg(rm) << 16) | (to_reg(rn) << 5) | to_reg(rd));
@@ -116,7 +116,7 @@ void Assembler::neon_fcmeq(Register rd, Register rn, Register rm, NeonArrangemen
 
 
 
-void Assembler::neon_str(Register rt, Register rn, int32_t offset) {
+void AssemblerAArch64::neon_str(Register rt, Register rn, int32_t offset) {
     uint32_t size = 0, opc = 0;
     uint32_t scale = 0;
     if (is_s_register(rt))      { size = 0b10; opc = 0b00; scale = 2; }
@@ -131,4 +131,4 @@ void Assembler::neon_str(Register rt, Register rn, int32_t offset) {
     emit((size << 30) | (opc << 22) | 0x3C000000 | (1 << 24) | (imm12 << 10) | (to_reg(rn) << 5) | to_reg(rt));
 }
 
-} // namespace ur::assembler
+} // namespace ur::assembler::arm64

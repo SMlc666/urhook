@@ -1,6 +1,7 @@
 #include "ur/mid_hook.h"
 #include "ur/inline_hook.h"
 #include <stdexcept>
+#include <utility>
 
 namespace ur::mid_hook {
 
@@ -36,18 +37,6 @@ MidHook::MidHook(uintptr_t target, Callback callback)
         );
     }
     jit->str(assembler::Register::LR, assembler::Register::SP, 30 * 8);
-    // The last register pair
-    jit->stp(
-        assembler::Register::X28,
-        assembler::Register::FP,
-        assembler::Register::SP,
-        28 * 8
-    );
-    jit->str(
-        assembler::Register::LR,
-        assembler::Register::SP,
-        30 * 8
-    );
 
     // Call the user-provided callback
     jit->mov(assembler::Register::X0, assembler::Register::SP); // Pass context pointer
@@ -63,18 +52,6 @@ MidHook::MidHook(uintptr_t target, Callback callback)
         );
     }
     jit->ldr(assembler::Register::LR, assembler::Register::SP, 30 * 8);
-    // The last register pair
-    jit->ldp(
-        assembler::Register::X28,
-        assembler::Register::FP,
-        assembler::Register::SP,
-        28 * 8
-    );
-    jit->ldr(
-        assembler::Register::LR,
-        assembler::Register::SP,
-        30 * 8
-    );
     jit->add(assembler::Register::SP, assembler::Register::SP, context_size);
 
     // Jump to the original instructions (trampoline)
@@ -91,16 +68,22 @@ MidHook::MidHook(uintptr_t target, Callback callback)
     inline_hook_->enable();
 }
 
-// Destructor implementation is now required in the .cpp file
-MidHook::~MidHook() {
-    unhook();
-    reset();
-}
+// Destructor: Let the member destructors handle cleanup (RAII).
+// The destruction order (reverse of declaration) is correct:
+// 1. inline_hook_ is destructed -> unhooks the target.
+// 2. detour_jit_ is destructed -> frees the JIT memory.
+MidHook::~MidHook() = default;
 
 void MidHook::unhook() {
     if (inline_hook_) {
-        inline_hook_->unhook();
+        // The unique_ptr's destructor will call the Hook's destructor,
+        // which in turn calls unhook. So we just need to reset it.
+        inline_hook_.reset();
     }
+    // After unhooking, we can safely release the resources.
+    detour_jit_.reset();
+    detour_ = nullptr;
+    callback_ = nullptr;
 }
 
 bool MidHook::enable() {
@@ -115,29 +98,29 @@ bool MidHook::is_valid() const {
     return inline_hook_ && inline_hook_->is_valid();
 }
 
-void MidHook::reset() {
-    inline_hook_.reset();
-    detour_jit_.reset();
-    detour_ = nullptr;
-    callback_ = nullptr;
-}
-
 MidHook::MidHook(MidHook&& other) noexcept
     : callback_(other.callback_),
       detour_jit_(std::move(other.detour_jit_)),
       detour_(other.detour_),
       inline_hook_(std::move(other.inline_hook_)) {
-    other.reset();
+    // Invalidate the moved-from object so its destructor does nothing.
+    other.callback_ = nullptr;
+    other.detour_ = nullptr;
 }
 
 MidHook& MidHook::operator=(MidHook&& other) noexcept {
     if (this != &other) {
-        unhook(); // Unhook current instance before overwriting
-        callback_ = other.callback_;
+        // By assigning new members, the old members are destructed in the correct order.
+        // 1. Old inline_hook_ is destructed (unhooks).
+        // 2. Old detour_jit_ is destructed (frees JIT memory).
+        inline_hook_ = std::move(other.inline_hook_);
         detour_jit_ = std::move(other.detour_jit_);
         detour_ = other.detour_;
-        inline_hook_ = std::move(other.inline_hook_);
-        other.reset();
+        callback_ = other.callback_;
+
+        // Invalidate the moved-from object.
+        other.callback_ = nullptr;
+        other.detour_ = nullptr;
     }
     return *this;
 }
