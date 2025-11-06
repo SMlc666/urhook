@@ -25,7 +25,7 @@ jobs:
         xmake-version: latest
 
     - name: Configure Xmake
-      run: xmake -y f --host=android -m release -a arm64-v8a --plat=android
+      run: xmake f --host=android -m release -a arm64-v8a -p android -y
 
     - name: Build with Xmake
       run: xmake -y
@@ -38,7 +38,7 @@ jobs:
 
   test-linux-arm64:
     name: Linux ARM64 Tests
-    runs-on: ubuntu-24.04-arm
+    runs-on: ubuntu-24.04-arm64
     strategy:
       fail-fast: false
       matrix:
@@ -65,12 +65,17 @@ jobs:
           xrepo-${{ runner.os }}-${{ runner.arch }}-
 
     - name: Configure Xmake (${{ matrix.build_type }})
-      run: xmake -y f -m ${{ matrix.build_type }} --plat=linux
+      run: xmake f -m ${{ matrix.build_type }} -y
+      env:
+        XMAKE_BUILD_MODE: ${{ matrix.build_type }}
 
     - name: Build tests (${{ matrix.build_type }})
       run: xmake -y build tests
+      env:
+        XMAKE_BUILD_MODE: ${{ matrix.build_type }}
 
     - name: Run tests (${{ matrix.build_type }})
       run: xmake -y r tests
       env:
+        XMAKE_BUILD_MODE: ${{ matrix.build_type }}
         GTEST_COLOR: "1"
