@@ -25,7 +25,7 @@ jobs:
         xmake-version: latest
 
     - name: Configure Xmake
-      run: xmake -y f --host=android -m release -a arm64-v8a -p android
+      run: xmake -y f --host=android -m release -a arm64-v8a --plat=android
 
     - name: Build with Xmake
       run: xmake -y
@@ -65,7 +65,7 @@ jobs:
           xrepo-${{ runner.os }}-${{ runner.arch }}-
 
     - name: Configure Xmake (${{ matrix.build_type }})
-      run: xmake -y f --mode=${{ matrix.build_type }}
+      run: xmake -y f -m ${{ matrix.build_type }} --plat=linux
 
     - name: Build tests (${{ matrix.build_type }})
       run: xmake -y build tests
