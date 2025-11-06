@@ -11,7 +11,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-    - uses: actions/checkout@v3
+    - uses: actions/checkout@v4
 
     - name: Setup NDK
       uses: nttld/setup-ndk@v1
@@ -35,3 +35,42 @@ jobs:
       with:
         name: urhook-android
         path: build/android/arm64-v8a/release/liburhook.a
+
+  test-linux-arm64:
+    name: Linux ARM64 Tests
+    runs-on: ubuntu-24.04-arm
+    strategy:
+      fail-fast: false
+      matrix:
+        build_type: [debug, release]
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Install build dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y build-essential cmake ninja-build pkg-config
+
+    - name: Setup Xmake
+      uses: xmake-io/github-action-setup-xmake@v1
+      with:
+        xmake-version: latest
+
+    - name: Cache Xmake packages
+      uses: actions/cache@v4
+      with:
+        path: ~/.xmake
+        key: xrepo-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('xmake.lua') }}
+        restore-keys: |
+          xrepo-${{ runner.os }}-${{ runner.arch }}-
+
+    - name: Configure Xmake (${{ matrix.build_type }})
+      run: xmake f -p linux -m ${{ matrix.build_type }} -y
+
+    - name: Build tests (${{ matrix.build_type }})
+      run: xmake build tests -y
+
+    - name: Run tests (${{ matrix.build_type }})
+      run: xmake r tests
+      env:
+        GTEST_COLOR: "1"
