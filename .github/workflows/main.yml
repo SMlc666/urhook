@@ -65,7 +65,7 @@ jobs:
           xrepo-${{ runner.os }}-${{ runner.arch }}-
 
     - name: Configure Xmake (${{ matrix.build_type }})
-      run: xmake -y f -p linux -m ${{ matrix.build_type }}
+      run: xmake -y f --mode=${{ matrix.build_type }}
 
     - name: Build tests (${{ matrix.build_type }})
       run: xmake -y build tests
