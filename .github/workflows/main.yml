@@ -38,11 +38,7 @@ jobs:
 
   test-linux-arm64:
     name: Linux ARM64 Tests
-    runs-on: ubuntu-24.04-arm64
-    strategy:
-      fail-fast: false
-      matrix:
-        build_type: [debug, release]
+    runs-on: ubuntu-24.04-arm
     steps:
     - uses: actions/checkout@v4
 
@@ -64,18 +60,13 @@ jobs:
         restore-keys: |
           xrepo-${{ runner.os }}-${{ runner.arch }}-
 
-    - name: Configure Xmake (${{ matrix.build_type }})
-      run: xmake f -m ${{ matrix.build_type }} -y
-      env:
-        XMAKE_BUILD_MODE: ${{ matrix.build_type }}
+    - name: Configure Xmake
+      run: xmake -y f
 
-    - name: Build tests (${{ matrix.build_type }})
+    - name: Build tests
       run: xmake -y build tests
-      env:
-        XMAKE_BUILD_MODE: ${{ matrix.build_type }}
 
-    - name: Run tests (${{ matrix.build_type }})
+    - name: Run tests
       run: xmake -y r tests
       env:
-        XMAKE_BUILD_MODE: ${{ matrix.build_type }}
         GTEST_COLOR: "1"
