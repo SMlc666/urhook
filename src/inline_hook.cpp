@@ -9,6 +9,7 @@
 #include <stdexcept>
 #include <algorithm>
 #include <sys/mman.h>
+#include <cstring>
 #include <unistd.h>
 
 namespace ur::inline_hook {
@@ -194,7 +195,7 @@ bool update_detour_stub(HookInfo& info, uintptr_t detour_addr) {
     stub_asm.gen_abs_jump(detour_addr, Register::X16);
     const auto& stub_code = stub_asm.get_code();
 
-    memcpy(info.detour_stub, stub_code.data(), stub_code.size() * sizeof(uint32_t));
+    std::memcpy(info.detour_stub, stub_code.data(), stub_code.size() * sizeof(uint32_t));
     info.detour_stub_size = stub_asm.get_code_size();
 
     __builtin___clear_cache(reinterpret_cast<char*>(info.detour_stub),
@@ -455,7 +456,7 @@ Hook::Hook(uintptr_t target, Callback callback, bool enable_now) {
             if (!info.trampoline) throw std::runtime_error("Failed to allocate trampoline memory");
 
             // Copy the relocated code into the trampoline
-            memcpy(info.trampoline, relocated_code.data(), relocated_size);
+            std::memcpy(info.trampoline, relocated_code.data(), relocated_size);
             
             // Add the jump back to the original function
             assembler::Assembler tramp_asm(reinterpret_cast<uintptr_t>(info.trampoline) + relocated_size);
@@ -463,7 +464,7 @@ Hook::Hook(uintptr_t target, Callback callback, bool enable_now) {
             
             // Copy the generated jump code to the trampoline
             const auto& tramp_jump_code = tramp_asm.get_code();
-            memcpy(reinterpret_cast<char*>(info.trampoline) + relocated_size, tramp_jump_code.data(), tramp_jump_code.size() * sizeof(uint32_t));
+            std::memcpy(reinterpret_cast<char*>(info.trampoline) + relocated_size, tramp_jump_code.data(), tramp_jump_code.size() * sizeof(uint32_t));
 
             // Save original code
             info.original_code.assign(reinterpret_cast<uint8_t*>(target), reinterpret_cast<uint8_t*>(target) + info.backup_size);
