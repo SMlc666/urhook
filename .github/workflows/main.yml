@@ -64,9 +64,9 @@ jobs:
       run: xmake -y f
 
     - name: Build tests
-      run: xmake -y build tests
+      run: xmake -y
 
     - name: Run tests
-      run: xmake -y r tests
+      run: xmake -y r
       env:
         GTEST_COLOR: "1"
