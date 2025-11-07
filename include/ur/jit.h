@@ -4,6 +4,7 @@
 #include <utility>
 #include <sys/mman.h>
 #include <unistd.h>
+#include <cstring>
 #include <map>
 #include "ur/assembler.h"
 #include "ur/memory.h"
@@ -80,7 +81,7 @@ namespace ur::jit {
             }
             size_ = aligned_size;
 
-            memcpy(mem_, code.data(), size);
+            std::memcpy(mem_, code.data(), size);
             __builtin___clear_cache(reinterpret_cast<char*>(mem_), reinterpret_cast<char*>(mem_) + size);
 
             return reinterpret_cast<T>(mem_);
