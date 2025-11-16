@@ -333,45 +333,48 @@ std::vector<uint32_t> relocate_trampoline(uintptr_t target, uintptr_t trampoline
             bool handled = false;
 
             if (i == 0) {
-                // Try to decode the previous instruction (at target - 4).
-                auto prev_vec = disassembler->Disassemble(target - 4, reinterpret_cast<const uint8_t*>(target - 4), 4, 1);
-                if (!prev_vec.empty()) {
-                    auto& prev = prev_vec[0];
-                    if (prev.id == disassembler::InstructionId::ADRP) {
-                        auto adrp_dest_reg = std::get<assembler::Register>(prev.operands[0].value);
-                        uintptr_t page_addr = std::get<int64_t>(prev.operands[1].value);
+                // Try to decode the previous instruction (at target - 4), but only if it's in a valid memory region.
+                ur::memory::MappedRegion region;
+                if (ur::memory::find_mapped_region(target - 4, region)) {
+                    auto prev_vec = disassembler->Disassemble(target - 4, reinterpret_cast<const uint8_t*>(target - 4), 4, 1);
+                    if (!prev_vec.empty()) {
+                        auto& prev = prev_vec[0];
+                        if (prev.id == disassembler::InstructionId::ADRP) {
+                            auto adrp_dest_reg = std::get<assembler::Register>(prev.operands[0].value);
+                            uintptr_t page_addr = std::get<int64_t>(prev.operands[1].value);
 
-                        // Case A: ADD following ADRP: ADD Xd, Xn(=ADRP rd), #imm{, lsl #12}
-                        if (current_insn.id == disassembler::InstructionId::ADD &&
-                            current_insn.operands.size() > 2 &&
-                            current_insn.operands[1].type == disassembler::OperandType::REGISTER &&
-                            std::get<assembler::Register>(current_insn.operands[1].value) == adrp_dest_reg &&
-                            current_insn.operands[2].type == disassembler::OperandType::IMMEDIATE) {
+                            // Case A: ADD following ADRP
+                            if (current_insn.id == disassembler::InstructionId::ADD &&
+                                current_insn.operands.size() > 2 &&
+                                current_insn.operands[1].type == disassembler::OperandType::REGISTER &&
+                                std::get<assembler::Register>(current_insn.operands[1].value) == adrp_dest_reg &&
+                                current_insn.operands[2].type == disassembler::OperandType::IMMEDIATE) {
 
-                            uintptr_t final_addr = page_addr + std::get<int64_t>(current_insn.operands[2].value);
-                            auto dest_reg = std::get<assembler::Register>(current_insn.operands[0].value);
-                            tramp_asm.gen_load_address(dest_reg, final_addr);
-                            backup_size += current_insn.size;
-                            handled = true;
-                        }
-                        // Case B: LDR/STR with base from ADRP: LDR/STR Rt, [Xn(=ADRP rd), #disp]
-                        else if ((current_insn.id == disassembler::InstructionId::LDR || current_insn.id == disassembler::InstructionId::STR) &&
-                                 current_insn.operands.size() > 1 &&
-                                 current_insn.operands[1].type == disassembler::OperandType::MEMORY) {
-
-                            auto mem_op = std::get<disassembler::MemOperand>(current_insn.operands[1].value);
-                            if (mem_op.base == adrp_dest_reg) {
-                                uintptr_t final_addr = page_addr + mem_op.displacement;
-                                auto data_reg = std::get<assembler::Register>(current_insn.operands[0].value);
-
-                                tramp_asm.gen_load_address(assembler::Register::X16, final_addr);
-                                if (current_insn.id == disassembler::InstructionId::LDR) {
-                                    tramp_asm.ldr(data_reg, assembler::Register::X16, 0);
-                                } else { // STR
-                                    tramp_asm.str(data_reg, assembler::Register::X16, 0);
-                                }
+                                uintptr_t final_addr = page_addr + std::get<int64_t>(current_insn.operands[2].value);
+                                auto dest_reg = std::get<assembler::Register>(current_insn.operands[0].value);
+                                tramp_asm.gen_load_address(dest_reg, final_addr);
                                 backup_size += current_insn.size;
                                 handled = true;
+                            }
+                            // Case B: LDR/STR with base from ADRP
+                            else if ((current_insn.id == disassembler::InstructionId::LDR || current_insn.id == disassembler::InstructionId::STR) &&
+                                     current_insn.operands.size() > 1 &&
+                                     current_insn.operands[1].type == disassembler::OperandType::MEMORY) {
+
+                                auto mem_op = std::get<disassembler::MemOperand>(current_insn.operands[1].value);
+                                if (mem_op.base == adrp_dest_reg) {
+                                    uintptr_t final_addr = page_addr + mem_op.displacement;
+                                    auto data_reg = std::get<assembler::Register>(current_insn.operands[0].value);
+
+                                    tramp_asm.gen_load_address(assembler::Register::X16, final_addr);
+                                    if (current_insn.id == disassembler::InstructionId::LDR) {
+                                        tramp_asm.ldr(data_reg, assembler::Register::X16, 0);
+                                    } else { // STR
+                                        tramp_asm.str(data_reg, assembler::Register::X16, 0);
+                                    }
+                                    backup_size += current_insn.size;
+                                    handled = true;
+                                }
                             }
                         }
                     }
